@@ -1,114 +1,96 @@
-import {
-	Editor,
-	MarkdownView,
-	MarkdownFileInfo,
-	Modal,
-	Notice,
-	Plugin,
-} from 'obsidian';
-import {
-	DEFAULT_SETTINGS,
-	MyPluginSettings,
-	SampleSettingTab,
-} from './settings';
+import { Plugin } from "obsidian";
+import { DEFAULT_SETTINGS, ImmichPhoto, ImmichPublicApi, ImmichSettings } from "./types";
+import { ImmichClient } from "./immich/client";
+import { ImmichSettingTab } from "./settings";
+import { createImmichBlockProcessor } from "./ui/renderer";
+import { getDayRangeUtc } from "./immich/date-utils";
 
-// Remember to rename these classes and interfaces!
+export default class ImmichMemoriesPlugin extends Plugin {
+	settings!: ImmichSettings;
+	private client!: ImmichClient;
 
-export default class MyPlugin extends Plugin {
-	settings!: MyPluginSettings;
+	/** Public API exposed to other plugins via app.plugins.plugins['obsidian-immich-memories'].api */
+	public api!: ImmichPublicApi;
 
 	async onload() {
 		await this.loadSettings();
 
-		// This creates an icon in the left ribbon.
-		this.addRibbonIcon('dice', 'Sample', (_evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
+		this.client = new ImmichClient(this.settings.immichServerUrl, this.settings.immichApiKey);
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status bar text');
+		this.api = this.buildPublicApi();
 
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-modal-simple',
-			name: 'Open modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			},
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'replace-selected',
-			name: 'Replace selected content',
-			editorCallback: (
-				editor: Editor,
-				_ctx: MarkdownView | MarkdownFileInfo,
-			) => {
-				editor.replaceSelection('Sample editor command');
-			},
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-modal-complex',
-			name: 'Open modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView =
-					this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
+		// Expose settings tab
+		this.addSettingTab(new ImmichSettingTab(this.app, this));
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-				return false;
-			},
-		});
+		// Register the codeblock renderer
+		this.registerMarkdownCodeBlockProcessor("obsidian-immich-memories", createImmichBlockProcessor(this.app, () => this.client, () => this.settings));
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(activeDocument, 'click', (_evt: MouseEvent) => {
-			new Notice('Click');
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(
-			window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000),
-		);
+		// Also support hyphen-less alias for convenience
+		this.registerMarkdownCodeBlockProcessor("immich-memories", createImmichBlockProcessor(this.app, () => this.client, () => this.settings));
 	}
 
-	onunload() {}
+	onunload() {
+		// Obsidian auto cleans registered processors, but clear references
+	}
 
 	async loadSettings() {
-		this.settings = Object.assign(
-			{},
-			DEFAULT_SETTINGS,
-			(await this.loadData()) as Partial<MyPluginSettings>,
-		);
+		const loaded = (await this.loadData()) as Partial<ImmichSettings> | null;
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded ?? {});
+		// Ensure defaults trimmed
+		this.settings.dateField = this.settings.dateField?.trim() || DEFAULT_SETTINGS.dateField;
+		this.settings.timezoneField = this.settings.timezoneField?.trim() || DEFAULT_SETTINGS.timezoneField;
 	}
 
 	async saveSettings() {
 		await this.saveData(this.settings);
-	}
-}
-
-class SampleModal extends Modal {
-	onOpen() {
-		const { contentEl } = this;
-		contentEl.setText('Woah!');
+		if (this.client) {
+			this.client.updateConfig(this.settings.immichServerUrl, this.settings.immichApiKey);
+		}
 	}
 
-	onClose() {
-		const { contentEl } = this;
-		contentEl.empty();
+	// --- Public API methods ---
+
+	/**
+	 * Get photos for a calendar day + timezone.
+	 * Required for task: expose public API for finding photos given a date and timezone
+	 * where photos will be list of structs holding assetId, thumbnail URL, and fullsize URL.
+	 */
+	async getPhotosForDate(dateStr: string, timeZone: string): Promise<ImmichPhoto[]> {
+		return this.client.getPhotosForDate(dateStr, timeZone);
+	}
+
+	/** Alias per interface */
+	async findPhotos(dateStr: string, timeZone: string): Promise<ImmichPhoto[]> {
+		return this.getPhotosForDate(dateStr, timeZone);
+	}
+
+	/** Get thumbnail URL given an assetId */
+	getThumbnailUrl(assetId: string): string {
+		return this.client.getThumbnailUrl(assetId);
+	}
+
+	/** Get fullsize image URL given an assetId */
+	getFullsizeUrl(assetId: string): string {
+		return this.client.getFullsizeUrl(assetId);
+	}
+
+	/** Helper for range queries – part of public API surface */
+	async searchByDateRangeTaken(takenAfter: string, takenBefore: string): Promise<ImmichPhoto[]> {
+		return this.client.searchByDateRangeTaken(takenAfter, takenBefore);
+	}
+
+	/** Exposed utility: returns UTC range for debugging/other plugins */
+	getDayRangeUtc(dateStr: string, timeZone: string) {
+		return getDayRangeUtc(dateStr, timeZone);
+	}
+
+	private buildPublicApi(): ImmichPublicApi {
+		return {
+			getPhotosForDate: this.getPhotosForDate.bind(this),
+			findPhotos: this.findPhotos.bind(this),
+			getThumbnailUrl: this.getThumbnailUrl.bind(this),
+			getFullsizeUrl: this.getFullsizeUrl.bind(this),
+			searchByDateRangeTaken: this.searchByDateRangeTaken.bind(this),
+		};
 	}
 }

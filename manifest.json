@@ -1,11 +1,9 @@
 {
-	"id": "sample-plugin",
-	"name": "Sample Plugin",
-	"version": "1.0.0",
-	"minAppVersion": "1.0.0",
-	"description": "Demonstrates some of the capabilities of the Obsidian API.",
-	"author": "Obsidian",
-	"authorUrl": "https://obsidian.md",
-	"fundingUrl": "https://obsidian.md/pricing",
-	"isDesktopOnly": false
+  "author": "Immich Memories",
+  "description": "Load photos from Immich for a given day parsed from frontmatter. Displays them via an obsidian-immich-memories codeblock with preview, gallery, and modal viewer.",
+  "id": "obsidian-immich-memories",
+  "isDesktopOnly": false,
+  "minAppVersion": "0.15.0",
+  "name": "Immich Memories",
+  "version": "0.1.0"
 }
