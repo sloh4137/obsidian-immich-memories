@@ -1,5 +1,6 @@
-import { App, Modal } from "obsidian";
+import { App, Modal, Notice } from "obsidian";
 import { ImmichPhoto } from "../types";
+import { AssetFileCache } from "../cache";
 
 export class ImmichPhotoModal extends Modal {
 	private photos: ImmichPhoto[];
@@ -8,11 +9,13 @@ export class ImmichPhotoModal extends Modal {
 	private captionEl: HTMLElement | null = null;
 	private counterEl: HTMLElement | null = null;
 	private container: HTMLElement | null = null;
+	private assetCache?: AssetFileCache;
 
-	constructor(app: App, photos: ImmichPhoto[], startIndex = 0) {
+	constructor(app: App, photos: ImmichPhoto[], startIndex = 0, assetCache?: AssetFileCache) {
 		super(app);
 		this.photos = photos;
 		this.currentIndex = Math.max(0, Math.min(startIndex, photos.length - 1));
+		this.assetCache = assetCache;
 	}
 
 	onOpen(): void {
@@ -22,15 +25,12 @@ export class ImmichPhotoModal extends Modal {
 		contentEl.addClass("immich-memories-modal-content");
 		contentEl.empty();
 
-		// Header with counter and close hint
 		const header = contentEl.createDiv({ cls: "immich-memories-modal-header" });
 		this.counterEl = header.createDiv({ cls: "immich-memories-modal-counter" });
 		this.updateCounter();
 
-		// Image wrapper
 		const wrapper = contentEl.createDiv({ cls: "immich-memories-modal-wrapper" });
 
-		// Nav buttons
 		const prevBtn = wrapper.createEl("button", {
 			cls: "immich-memories-modal-nav immich-memories-modal-prev",
 			text: "‹",
@@ -40,7 +40,6 @@ export class ImmichPhotoModal extends Modal {
 
 		this.imgEl = wrapper.createEl("img", { cls: "immich-memories-modal-image" });
 		this.imgEl.addEventListener("click", () => {
-			// Click on image to go next, consistent with typical lightbox
 			if (this.photos.length > 1) this.showNext();
 		});
 
@@ -51,14 +50,12 @@ export class ImmichPhotoModal extends Modal {
 		nextBtn.setAttr("aria-label", "Next photo");
 		nextBtn.addEventListener("click", () => this.showNext());
 
-		// Caption
 		this.captionEl = contentEl.createDiv({ cls: "immich-memories-modal-caption" });
 
 		this.container = wrapper;
 
-		this.loadCurrent();
+		void this.loadCurrent();
 
-		// Keyboard navigation
 		this.scope.register([], "ArrowLeft", () => {
 			this.showPrevious();
 			return false;
@@ -72,7 +69,6 @@ export class ImmichPhotoModal extends Modal {
 			return false;
 		});
 
-		// Touch swipe support
 		let startX = 0;
 		wrapper.addEventListener(
 			"touchstart",
@@ -110,15 +106,38 @@ export class ImmichPhotoModal extends Modal {
 		}
 	}
 
-	private loadCurrent(): void {
+	private async loadCurrent(): Promise<void> {
 		const photo = this.photos[this.currentIndex];
 		if (!photo || !this.imgEl) return;
 
 		this.updateCounter();
 
-		// Show loading state
+		// Try to use local fullsize if cached, else remote, and attempt to cache in background
+		let fullUrl = photo.fullsizeUrl;
+
+		if (this.assetCache?.isEnabled()) {
+			const localFull = this.assetCache.getFullsizeLocalUrl(photo.assetId);
+			if (localFull) {
+				fullUrl = localFull;
+			} else {
+				// Attempt to cache fullsize now (await with timeout)
+				try {
+					// Note: we don't have apiKey here directly, but cache stores remoteUrl which already includes key in query,
+					// and requestUrl will be called with apiKey from settings via assetCache's ensure method which needs key.
+					// We'll rely on the cache method to fetch using query param url (which includes apiKey) even without header.
+					// For proper behavior, assetCache's ensureFullsizeCached expects remoteUrl and apiKey – we pass empty apiKey and rely on query param
+					const cached = await this.assetCache.ensureFullsizeCached(photo.assetId, photo.fullsizeUrl, "");
+					if (cached) fullUrl = cached;
+				} catch {
+					// ignore
+				}
+			}
+		}
+
+		if (!this.imgEl) return;
 		this.imgEl.classList.add("is-loading");
-		this.imgEl.src = photo.fullsizeUrl;
+		// Update src
+		this.imgEl.src = fullUrl;
 		this.imgEl.alt = photo.originalFileName || `Photo ${photo.assetId}`;
 
 		this.imgEl.onload = () => {
@@ -126,20 +145,16 @@ export class ImmichPhotoModal extends Modal {
 		};
 		this.imgEl.onerror = () => {
 			this.imgEl?.classList.remove("is-loading");
-			// Fallback to thumbnail if original fails (maybe original is too large or endpoint differs)
-			// Try preview variant by swapping size
 			if (this.imgEl && this.imgEl.src !== photo.thumbnailUrl) {
-				// Second attempt with preview? We attempt to derive preview URL from thumbnail pattern
-				// If thumbnail contains size=thumbnail, replace with size=preview; else keep original logic
 				const previewUrl = photo.thumbnailUrl.includes("size=thumbnail")
 					? photo.thumbnailUrl.replace("size=thumbnail", "size=preview")
 					: photo.thumbnailUrl;
-				// Avoid infinite loop
 				if (previewUrl !== this.imgEl.src) {
 					this.imgEl.src = previewUrl;
 					return;
 				}
 			}
+			new Notice("Failed to load fullsize image; showing thumbnail if available");
 		};
 
 		if (this.captionEl) {
@@ -169,12 +184,12 @@ export class ImmichPhotoModal extends Modal {
 	private showPrevious(): void {
 		if (this.photos.length <= 1) return;
 		this.currentIndex = (this.currentIndex - 1 + this.photos.length) % this.photos.length;
-		this.loadCurrent();
+		void this.loadCurrent();
 	}
 
 	private showNext(): void {
 		if (this.photos.length <= 1) return;
 		this.currentIndex = (this.currentIndex + 1) % this.photos.length;
-		this.loadCurrent();
+		void this.loadCurrent();
 	}
 }

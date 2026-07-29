@@ -5,8 +5,7 @@
 }
 
 .immich-memories-message,
-.immich-memories-loading,
-.immich-memories-error {
+.immich-memories-loading {
   padding: 0.6em 0.8em;
   border: 1px solid var(--background-modifier-border);
   background: var(--background-secondary);
@@ -16,8 +15,56 @@
 }
 
 .immich-memories-error {
-  border-color: var(--text-error);
+  border: 1px solid var(--background-modifier-border);
+  border-left: 3px solid var(--text-error);
+  background: var(--background-primary);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  font-size: 0.9em;
+  line-height: 1.4;
+}
+
+.immich-memories-error-title {
+  font-weight: 600;
+  padding: 0.6em 0.8em 0.2em;
   color: var(--text-error);
+  font-size: 0.95em;
+}
+
+.immich-memories-error-body {
+  padding: 0.2em 0.8em;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-normal);
+}
+
+.immich-memories-error-meta {
+  padding: 0.2em 0.8em;
+  font-size: 0.8em;
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.immich-memories-error-help {
+  padding: 0.4em 0.8em 0.6em;
+  font-size: 0.85em;
+  color: var(--text-muted);
+  border-top: 1px solid var(--background-modifier-border);
+  margin-top: 0.4em;
+}
+
+.immich-memories-error-help ul {
+  margin: 0.3em 0 0 1.2em;
+  padding: 0;
+}
+
+.immich-memories-error-help li {
+  margin: 0.2em 0;
 }
 
 .immich-memories-container {

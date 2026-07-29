@@ -1,8 +1,39 @@
-import { requestUrl, RequestUrlResponse } from "obsidian";
-import { ImmichAsset, ImmichPhoto } from "../types";
-import { getDayRangeUtc, normalizeTimeZone } from "./date-utils";
+import { requestUrl, RequestUrlResponse } from 'obsidian';
+import { ImmichAsset, ImmichPhoto } from '../types';
+import { getDayRangeUtc, normalizeTimeZone } from './date-utils';
 
 export type FetchFn = typeof requestUrl;
+
+function extractErrorBody(res: RequestUrlResponse): string {
+	try {
+		const json = res.json as unknown;
+		if (typeof json === 'object' && json !== null) {
+			const obj = json as Record<string, unknown>;
+			if (typeof obj.message === 'string' && obj.message)
+				return obj.message;
+			if (typeof obj.error === 'string' && obj.error) return obj.error;
+			if (typeof obj.msg === 'string' && obj.msg) return obj.msg;
+			// Some Immich errors nest under statusCode, message
+			if (obj.statusCode && obj.message) {
+				const code =
+					typeof obj.statusCode === 'string' ||
+					typeof obj.statusCode === 'number'
+						? String(obj.statusCode)
+						: JSON.stringify(obj.statusCode);
+				return `${code} ${obj.message as string}`;
+			}
+			return JSON.stringify(json);
+		}
+	} catch {
+		void 0;
+	}
+	if (typeof res.text === 'string' && res.text.trim()) {
+		// Truncate very long HTML
+		const t = res.text.trim();
+		return t.length > 500 ? `${t.slice(0, 500)}…` : t;
+	}
+	return `HTTP ${res.status}`;
+}
 
 export class ImmichClient {
 	private serverUrl: string;
@@ -10,15 +41,14 @@ export class ImmichClient {
 	private fetch: FetchFn;
 
 	constructor(serverUrl: string, apiKey: string, fetchFn?: FetchFn) {
-		this.serverUrl = (serverUrl || "").trim().replace(/\/+$/, "");
-		this.apiKey = (apiKey || "").trim();
-		// Allow injection for tests; default to Obsidian requestUrl which bypasses CORS
+		this.serverUrl = (serverUrl || '').trim().replace(/\/+$/, '');
+		this.apiKey = (apiKey || '').trim();
 		this.fetch = fetchFn ?? requestUrl;
 	}
 
 	updateConfig(serverUrl: string, apiKey: string) {
-		this.serverUrl = (serverUrl || "").trim().replace(/\/+$/, "");
-		this.apiKey = (apiKey || "").trim();
+		this.serverUrl = (serverUrl || '').trim().replace(/\/+$/, '');
+		this.apiKey = (apiKey || '').trim();
 	}
 
 	isConfigured(): boolean {
@@ -29,128 +59,210 @@ export class ImmichClient {
 		return this.serverUrl;
 	}
 
-	/**
-	 * Public API: thumbnail URL.
-	 * Includes apiKey as query param so <img> tags can load without custom headers in browsers/Electron.
-	 * Consumers can strip query if they plan to fetch with header instead.
-	 */
 	getThumbnailUrl(assetId: string): string {
-		if (!this.serverUrl || !assetId) return "";
-		const base = `${this.serverUrl}/api/assets/${encodeURIComponent(assetId)}/thumbnail`;
-		// Immich supports ?size=thumbnail|preview. We request thumbnail size for grid.
-		// Include api key as query for direct img usage; requestUrl users may prefer header.
-		return this.apiKey ? `${base}?size=thumbnail&apiKey=${encodeURIComponent(this.apiKey)}` : `${base}?size=thumbnail`;
+		if (!this.serverUrl || !assetId) return '';
+		const base = `${this.serverUrl}/api/assets/${encodeURIComponent(
+			assetId
+		)}/thumbnail`;
+		return this.apiKey
+			? `${base}?size=thumbnail&apiKey=${encodeURIComponent(this.apiKey)}`
+			: `${base}?size=thumbnail`;
 	}
 
-	/**
-	 * Public API: fullsize URL. Returns original file.
-	 */
 	getFullsizeUrl(assetId: string): string {
-		if (!this.serverUrl || !assetId) return "";
-		const base = `${this.serverUrl}/api/assets/${encodeURIComponent(assetId)}/original`;
-		return this.apiKey ? `${base}?apiKey=${encodeURIComponent(this.apiKey)}` : base;
+		if (!this.serverUrl || !assetId) return '';
+		const base = `${this.serverUrl}/api/assets/${encodeURIComponent(
+			assetId
+		)}/original`;
+		return this.apiKey
+			? `${base}?apiKey=${encodeURIComponent(this.apiKey)}`
+			: base;
 	}
 
-	/**
-	 * Alternative preview URL (large but not original) for modal fallback
-	 */
 	getPreviewUrl(assetId: string): string {
-		if (!this.serverUrl || !assetId) return "";
-		const base = `${this.serverUrl}/api/assets/${encodeURIComponent(assetId)}/thumbnail`;
-		return this.apiKey ? `${base}?size=preview&apiKey=${encodeURIComponent(this.apiKey)}` : `${base}?size=preview`;
+		if (!this.serverUrl || !assetId) return '';
+		const base = `${this.serverUrl}/api/assets/${encodeURIComponent(
+			assetId
+		)}/thumbnail`;
+		return this.apiKey
+			? `${base}?size=preview&apiKey=${encodeURIComponent(this.apiKey)}`
+			: `${base}?size=preview`;
 	}
 
-	private async doFetch(url: string, method = "GET", body?: string): Promise<RequestUrlResponse> {
-		if (!this.isConfigured()) {
-			throw new Error("Immich server URL and API key must be configured in settings");
+	private async doFetch(
+		url: string,
+		method = 'GET',
+		body?: string
+	): Promise<RequestUrlResponse> {
+		if (!this.serverUrl && !this.apiKey) {
+			throw new Error(
+				'Immich is not configured: server URL and API key are both missing. Open Settings → Immich Memories and set your Immich server URL (e.g. https://immich.example.com) and API key.'
+			);
 		}
+		if (!this.serverUrl) {
+			throw new Error(
+				'Immich server URL is not set. Configure it in Settings → Immich Memories. Example: https://immich.example.com (no trailing slash, no /api suffix).'
+			);
+		}
+		if (!this.apiKey) {
+			throw new Error(
+				'Immich API key is not set. Configure it in Settings → Immich Memories. Create a key in Immich → Account Settings → API Keys.'
+			);
+		}
+
 		const headers: Record<string, string> = {
-			"x-api-key": this.apiKey,
+			'x-api-key': this.apiKey,
 		};
 		if (body) {
-			headers["Content-Type"] = "application/json";
+			headers['Content-Type'] = 'application/json';
 		}
-		return this.fetch({
-			url,
-			method,
-			headers,
-			body,
-			throw: false,
-		});
+
+		try {
+			return await this.fetch({
+				url,
+				method,
+				headers,
+				body,
+				throw: false,
+			});
+		} catch (e: unknown) {
+			const cause = e instanceof Error ? e.message : String(e);
+			throw new Error(
+				`Failed to connect to Immich server at ${this.serverUrl}. Network error: ${cause}. ` +
+					`Check that the server URL is correct (e.g. https://immich.example.com, no trailing /api suffix), ` +
+					`that the Immich server is running and reachable from this device, ` +
+					`and that your API key is valid. If you use a self-signed certificate, ensure Obsidian/Electron trusts it. ` +
+					`Tried endpoint: ${url}`
+			);
+		}
 	}
 
-	/**
-	 * Low-level search raw response handling for various Immich API versions.
-	 */
 	private extractAssetsFromResponse(json: unknown): ImmichAsset[] {
 		if (!json) return [];
-
 		if (Array.isArray(json)) {
 			return json as ImmichAsset[];
 		}
-
-		if (typeof json === "object" && json !== null) {
+		if (typeof json === 'object' && json !== null) {
 			const obj = json as Record<string, unknown>;
-
 			if (obj.assets !== undefined) {
 				const assets = obj.assets as unknown;
 				if (Array.isArray(assets)) return assets as ImmichAsset[];
-				if (typeof assets === "object" && assets !== null) {
+				if (typeof assets === 'object' && assets !== null) {
 					const assetObj = assets as Record<string, unknown>;
 					if (Array.isArray(assetObj.items)) {
 						return assetObj.items as ImmichAsset[];
 					}
 				}
 			}
-
 			if (Array.isArray(obj.items)) {
 				return obj.items as ImmichAsset[];
 			}
 		}
-
 		return [];
 	}
 
-	/**
-	 * Search assets by takenAfter / takenBefore using /api/search/metadata.
-	 * Falls back to /api/search if metadata endpoint not available.
-	 */
-	async searchByDateRangeTaken(takenAfter: string, takenBefore: string): Promise<ImmichPhoto[]> {
-		// Primary endpoint: POST /api/search/metadata
+	async searchByDateRangeTaken(
+		takenAfter: string,
+		takenBefore: string
+	): Promise<ImmichPhoto[]> {
 		const endpoint = `${this.serverUrl}/api/search/metadata`;
 
 		const payload = {
 			takenAfter,
 			takenBefore,
-			// Immich supports type filter; we default to no filter but could query IMAGE
-			// Keeping generic to include videos too; caller can filter if needed.
 			size: 1000,
 		};
 
-		const res: RequestUrlResponse = await this.doFetch(endpoint, "POST", JSON.stringify(payload));
+		const res: RequestUrlResponse = await this.doFetch(
+			endpoint,
+			'POST',
+			JSON.stringify(payload)
+		);
 
 		if (res.status >= 200 && res.status < 300) {
 			const assets = this.extractAssetsFromResponse(res.json);
 			return this.mapAssetsToPhotos(assets);
 		}
 
-		// Fallback: Try older /api/search/metadata without size or with different shape
-		// Second try with simpler body
+		// Handle specific status codes explicitly
+		if (res.status === 401) {
+			throw new Error(
+				`Immich authentication failed (401) at ${this.serverUrl}. ` +
+					`Your API key is invalid or expired. Generate a new key in Immich → Account Settings → API Keys and update it in Settings → Immich Memories. ` +
+					`Server response: ${extractErrorBody(res)}`
+			);
+		}
+		if (res.status === 403) {
+			throw new Error(
+				`Immich access forbidden (403) at ${this.serverUrl}. ` +
+					`The API key does not have permission to search assets. Check the key's permissions in Immich. ` +
+					`Server response: ${extractErrorBody(res)}`
+			);
+		}
 		if (res.status === 404 || res.status === 400) {
-			const fallbackPayload = {
-				takenAfter,
-				takenBefore,
-			};
-			const fallbackRes = await this.doFetch(endpoint, "POST", JSON.stringify(fallbackPayload));
-			if (fallbackRes.status >= 200 && fallbackRes.status < 300) {
-				const assets = this.extractAssetsFromResponse(fallbackRes.json);
-				return this.mapAssetsToPhotos(assets);
+			// Try fallback with simpler payload
+			const fallbackPayload = { takenAfter, takenBefore };
+			let fallbackRes: RequestUrlResponse | null = null;
+			try {
+				fallbackRes = await this.doFetch(
+					endpoint,
+					'POST',
+					JSON.stringify(fallbackPayload)
+				);
+				if (fallbackRes.status >= 200 && fallbackRes.status < 300) {
+					const assets = this.extractAssetsFromResponse(
+						fallbackRes.json
+					);
+					return this.mapAssetsToPhotos(assets);
+				}
+			} catch {
+				void 0;
 			}
+
+			if (res.status === 404) {
+				throw new Error(
+					`Immich API endpoint not found (404) at ${endpoint}. ` +
+						`This does NOT mean no photos were found—it means the server URL or Immich version is wrong. ` +
+						`Current serverUrl setting: ${this.serverUrl}. ` +
+						`Expected base URL like https://immich.example.com (no trailing /api). ` +
+						`The endpoint /api/search/metadata exists in Immich v1.90+. If you run an older version, update Immich or check reverse proxy config. ` +
+						`Tried searching takenAfter=${takenAfter} takenBefore=${takenBefore}. ` +
+						`Server responses: primary=${extractErrorBody(
+							res
+						)} fallback=${
+							fallbackRes
+								? extractErrorBody(fallbackRes)
+								: 'no fallback attempt'
+						}`
+				);
+			}
+			// 400 bad request
+			throw new Error(
+				`Immich search request rejected (400) at ${endpoint}. ` +
+					`This usually means the date format or payload is invalid, or the server version expects different parameters. ` +
+					`Tried takenAfter=${takenAfter} takenBefore=${takenBefore}. ` +
+					`Server response: ${extractErrorBody(res)}`
+			);
 		}
 
-		// If still failing, throw with details
-		const msg = typeof res.json === "object" ? JSON.stringify(res.json) : res.text;
-		throw new Error(`Immich search failed (${res.status}): ${msg}`);
+		if (res.status >= 500) {
+			throw new Error(
+				`Immich server error (${res.status}) at ${this.serverUrl}. ` +
+					`The Immich server failed to process the search. Check Immich server logs. ` +
+					`Endpoint: ${endpoint} takenAfter=${takenAfter} takenBefore=${takenBefore}. ` +
+					`Server response: ${extractErrorBody(res)}`
+			);
+		}
+
+		// Generic non-2xx
+		throw new Error(
+			`Immich search failed with HTTP ${res.status} at ${
+				this.serverUrl
+			}${endpoint.replace(this.serverUrl, '')}. ` +
+				`Endpoint: ${endpoint}. Range: ${takenAfter} → ${takenBefore}. ` +
+				`Server response: ${extractErrorBody(res)}. ` +
+				`Check server URL, API key, and Immich version compatibility.`
+		);
 	}
 
 	private mapAssetsToPhotos(assets: ImmichAsset[]): ImmichPhoto[] {
@@ -160,21 +272,51 @@ export class ImmichClient {
 				assetId: a.id,
 				thumbnailUrl: this.getThumbnailUrl(a.id),
 				fullsizeUrl: this.getFullsizeUrl(a.id),
-				takenAt: a.exifInfo?.dateTimeOriginal ?? a.fileCreatedAt ?? a.localDateTime,
+				takenAt:
+					a.exifInfo?.dateTimeOriginal ??
+					a.fileCreatedAt ??
+					a.localDateTime,
 				originalFileName: a.originalFileName,
 				type: a.type,
 			}));
 	}
 
-	/**
-	 * Public API: find photos for a given calendar day and timezone.
-	 */
-	async getPhotosForDate(dateStr: string, timeZone: string): Promise<ImmichPhoto[]> {
+	async getPhotosForDate(
+		dateStr: string,
+		timeZone: string
+	): Promise<ImmichPhoto[]> {
 		const tz = normalizeTimeZone(timeZone);
 		const range = getDayRangeUtc(dateStr, tz);
 		if (!range) {
-			throw new Error(`Invalid date string: ${dateStr}. Expected YYYY-MM-DD`);
+			throw new Error(
+				`Invalid date string "${dateStr}". Expected format YYYY-MM-DD (e.g. 2023-07-15). ` +
+					`Check the frontmatter field configured in Settings → Immich Memories (currently "${dateStr}").`
+			);
 		}
-		return this.searchByDateRangeTaken(range.takenAfter, range.takenBefore);
+		try {
+			return await this.searchByDateRangeTaken(
+				range.takenAfter,
+				range.takenBefore
+			);
+		} catch (e: unknown) {
+			// Re-wrap with date context if not already explicit
+			if (e instanceof Error) {
+				if (
+					e.message.includes('Immich') ||
+					e.message.includes('Failed to connect') ||
+					e.message.includes('HTTP')
+				) {
+					throw e;
+				}
+				throw new Error(
+					`Failed to load Immich memories for ${dateStr} in timezone ${tz} (${range.takenAfter} → ${range.takenBefore}) from ${this.serverUrl}: ${e.message}`
+				);
+			}
+			throw new Error(
+				`Failed to load Immich memories for ${dateStr} in timezone ${tz} from ${
+					this.serverUrl
+				}: ${String(e)}`
+			);
+		}
 	}
 }

@@ -3,7 +3,7 @@
   "description": "Load photos from Immich for a given day parsed from frontmatter. Displays them via an obsidian-immich-memories codeblock with preview, gallery, and modal viewer.",
   "id": "obsidian-immich-memories",
   "isDesktopOnly": false,
-  "minAppVersion": "0.15.0",
+  "minAppVersion": "1.3.0",
   "name": "Immich Memories",
   "version": "0.1.0"
 }

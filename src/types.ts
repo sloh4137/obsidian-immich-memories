@@ -13,8 +13,24 @@ export interface ImmichSettings {
 	immichApiKey: string;
 	dateField: string;
 	timezoneField: string;
-	/** If true, cache blob URLs to avoid re-fetching */
+	/** Deprecated: old blob cache flag */
 	useBlobCache?: boolean;
+
+	/* ---- Asset file cache ---- */
+	/** Whether to use local filesystem cache for thumbnails/full */
+	useAssetCache: boolean;
+	/** Max size in MB for asset cache */
+	assetCacheSizeMB: number;
+	/** Optional custom folder relative to vault root; defaults to .obsidian/plugins/<id>/cache */
+	assetCacheFolder?: string;
+
+	/* ---- Date -> assetIds cache ---- */
+	/** Whether to cache date queries */
+	useDateCache: boolean;
+	/** How many days to keep date entries before eviction based on lastSearched */
+	dateCacheRetentionDays: number;
+	/** Optional max entries (0 = unlimited) */
+	dateCacheMaxEntries?: number;
 }
 
 export const DEFAULT_SETTINGS: ImmichSettings = {
@@ -23,6 +39,12 @@ export const DEFAULT_SETTINGS: ImmichSettings = {
 	dateField: "date",
 	timezoneField: "timezone",
 	useBlobCache: false,
+	useAssetCache: true,
+	assetCacheSizeMB: 200,
+	assetCacheFolder: "",
+	useDateCache: true,
+	dateCacheRetentionDays: 30,
+	dateCacheMaxEntries: 500,
 };
 
 export interface ImmichPublicApi {
@@ -42,6 +64,11 @@ export interface ImmichPublicApi {
 
 	/** Low-level helper to fetch raw assets between two UTC ISO timestamps */
 	searchByDateRangeTaken(takenAfter: string, takenBefore: string): Promise<ImmichPhoto[]>;
+
+	/** Cache management */
+	clearAssetCache(): Promise<void>;
+	clearDateCache(): Promise<void>;
+	getAssetCacheSizeMB(): number;
 }
 
 export interface ImmichAsset {
@@ -53,4 +80,25 @@ export interface ImmichAsset {
 	};
 	fileCreatedAt?: string;
 	localDateTime?: string;
+}
+
+/* ----- Cache data structures ----- */
+
+export interface AssetCacheRecord {
+	assetId: string;
+	thumbnailRelativePath?: string;
+	fullsizeRelativePath?: string;
+	thumbnailSize: number;
+	fullsizeSize: number;
+	lastAccessed: number;
+	createdAt: number;
+}
+
+export interface DateCacheEntry {
+	key: string; // date|timezone composite
+	dateStr: string;
+	timeZone: string;
+	assetIds: string[];
+	lastSearched: number;
+	createdAt: number;
 }
