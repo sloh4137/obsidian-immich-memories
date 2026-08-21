@@ -96,6 +96,7 @@
   object-fit: cover;
   cursor: pointer;
   border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
   background: var(--background-secondary);
   display: block;
 }
@@ -161,6 +162,14 @@
   overflow: hidden;
   background: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.immich-memories-thumb-wrapper:hover {
+  transform: scale(1.06);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  z-index: 1;
 }
 
 .immich-memories-thumb {
@@ -169,11 +178,18 @@
   object-fit: cover;
   display: block;
   cursor: pointer;
+  border-radius: 8px;
+  transition: filter 0.18s ease, opacity 0.18s ease, transform 0.18s ease;
 }
 
 .immich-memories-thumb:hover {
-  opacity: 0.88;
-  filter: brightness(1.04);
+  opacity: 1;
+  filter: brightness(1.06);
+  transform: scale(1.04);
+}
+
+.immich-memories-thumb-wrapper:hover .immich-memories-thumb {
+  filter: brightness(1.06);
 }
 
 .immich-memories-thumb:focus {
