@@ -1,5 +1,5 @@
 {
-  "author": "Immich Memories",
+  "author": "Stephan Loh",
   "description": "Load photos from Immich for a given day parsed from frontmatter. Displays them via an obsidian-immich-memories codeblock with preview, gallery, and modal viewer.",
   "id": "obsidian-immich-memories",
   "isDesktopOnly": false,

@@ -30,6 +30,22 @@ export default class ImmichMemoriesPlugin extends Plugin {
 		this.dateCache
 			.initialize()
 			.then(() => this.dateCache.cleanup())
+			.then(() => {
+				// One-time migration: old date caches may contain live-photo
+				// motion videos (MOV) that we now filter out. Clear them once
+				// so next fetch rebuilds without those videos.
+				const v = this.settings.dateCacheFilterVersion ?? 0;
+				if (v < 1) {
+					return this.dateCache
+						.clear()
+						.catch(() => {})
+						.then(() => {
+							this.settings.dateCacheFilterVersion = 1;
+							return this.saveData(this.settings).catch(() => {});
+						});
+				}
+				return;
+			})
 			.catch(() => {});
 
 		this.api = this.buildPublicApi();
@@ -75,6 +91,8 @@ export default class ImmichMemoriesPlugin extends Plugin {
 		if (typeof this.settings.dateCacheRetentionDays !== "number")
 			this.settings.dateCacheRetentionDays = DEFAULT_SETTINGS.dateCacheRetentionDays;
 		if (!this.settings.assetCacheFolder) this.settings.assetCacheFolder = "";
+		if (typeof this.settings.dateCacheFilterVersion !== "number")
+			this.settings.dateCacheFilterVersion = DEFAULT_SETTINGS.dateCacheFilterVersion;
 	}
 
 	async saveSettings() {
@@ -86,6 +104,43 @@ export default class ImmichMemoriesPlugin extends Plugin {
 
 	// --- Public API methods ---
 
+	private filterLivePhotoVideos(photos: ImmichPhoto[]): ImmichPhoto[] {
+		// Primary: drop any photo whose id is referenced as livePhotoVideoId
+		const liveVideoIds = new Set<string>();
+		for (const p of photos) {
+			if (p.livePhotoVideoId) liveVideoIds.add(p.livePhotoVideoId);
+		}
+		if (liveVideoIds.size > 0) {
+			return photos.filter((p) => !liveVideoIds.has(p.assetId));
+		}
+
+		// Fallback: HEIC + same-basename MOV considered live-photo pair
+		const heicBasenames = new Set<string>();
+		for (const p of photos) {
+			if (p.type !== 'IMAGE') continue;
+			const name = p.originalFileName;
+			if (!name) continue;
+			const lower = name.toLowerCase();
+			if (lower.endsWith('.heic') || lower.endsWith('.heif')) {
+				const base = name.slice(0, name.lastIndexOf('.')).toLowerCase();
+				if (base) heicBasenames.add(base);
+			}
+		}
+		if (heicBasenames.size === 0) return photos;
+
+		const movIds = new Set<string>();
+		for (const p of photos) {
+			if (p.type !== 'VIDEO') continue;
+			const name = p.originalFileName;
+			if (!name) continue;
+			if (!name.toLowerCase().endsWith('.mov')) continue;
+			const base = name.slice(0, name.lastIndexOf('.')).toLowerCase();
+			if (base && heicBasenames.has(base)) movIds.add(p.assetId);
+		}
+		if (movIds.size === 0) return photos;
+		return photos.filter((p) => !movIds.has(p.assetId));
+	}
+
 	/**
 	 * Get photos for a calendar day + timezone.
 	 * Uses date cache if enabled, and uses asset cache for local URLs.
@@ -96,20 +151,27 @@ export default class ImmichMemoriesPlugin extends Plugin {
 			try {
 				const cached = await this.dateCache.get(dateStr, timeZone);
 				if (cached && cached.assetIds.length > 0) {
-					return this.buildPhotosFromAssetIds(cached.assetIds);
+					const cachedPhotos = this.buildPhotosFromAssetIds(cached.assetIds);
+					// Best-effort filter for cached entries that might still
+					// have livePhotoVideoId metadata (future-proof). Old
+					// entries without that metadata were cleared via migration.
+					return this.filterLivePhotoVideos(cachedPhotos);
 				}
 			} catch {
 				// fall through to remote
 			}
 		}
 
-		// Remote fetch
+		// Remote fetch (client already filters out live-photo MOVs)
 		const photos = await this.client.getPhotosForDate(dateStr, timeZone);
 
-		// Populate date cache
+		// Ensure filtering at API layer as well (defense in depth)
+		const filtered = this.filterLivePhotoVideos(photos);
+
+		// Populate date cache with filtered ids
 		if (this.settings.useDateCache) {
 			try {
-				const assetIds = photos.map((p) => p.assetId);
+				const assetIds = filtered.map((p) => p.assetId);
 				await this.dateCache.set(dateStr, timeZone, assetIds);
 			} catch {
 				// ignore
@@ -118,11 +180,11 @@ export default class ImmichMemoriesPlugin extends Plugin {
 
 		// Populate asset cache thumbnails in background (fire and forget)
 		if (this.settings.useAssetCache) {
-			void this.cacheThumbnailsInBackground(photos);
+			void this.cacheThumbnailsInBackground(filtered);
 		}
 
 		// Return with local URLs if available
-		return photos.map((p) => this.applyLocalUrls(p));
+		return filtered.map((p) => this.applyLocalUrls(p));
 	}
 
 	/** Alias */
@@ -151,7 +213,8 @@ export default class ImmichMemoriesPlugin extends Plugin {
 	/** Helper for range queries */
 	async searchByDateRangeTaken(takenAfter: string, takenBefore: string): Promise<ImmichPhoto[]> {
 		const photos = await this.client.searchByDateRangeTaken(takenAfter, takenBefore);
-		return photos.map((p) => this.applyLocalUrls(p));
+		const filtered = this.filterLivePhotoVideos(photos);
+		return filtered.map((p) => this.applyLocalUrls(p));
 	}
 
 	getDayRangeUtc(dateStr: string, timeZone: string) {

@@ -6,6 +6,8 @@ export interface ImmichPhoto {
 	takenAt?: string;
 	originalFileName?: string;
 	type?: string;
+	/** If this asset is a live photo image, points to its motion video asset id */
+	livePhotoVideoId?: string | null;
 }
 
 export interface ImmichSettings {
@@ -31,6 +33,9 @@ export interface ImmichSettings {
 	dateCacheRetentionDays: number;
 	/** Optional max entries (0 = unlimited) */
 	dateCacheMaxEntries?: number;
+
+	/** Migration version for live-photo video filtering (clears old date cache once) */
+	dateCacheFilterVersion?: number;
 }
 
 export const DEFAULT_SETTINGS: ImmichSettings = {
@@ -45,6 +50,7 @@ export const DEFAULT_SETTINGS: ImmichSettings = {
 	useDateCache: true,
 	dateCacheRetentionDays: 30,
 	dateCacheMaxEntries: 500,
+	dateCacheFilterVersion: 0,
 };
 
 export interface ImmichPublicApi {
@@ -80,6 +86,8 @@ export interface ImmichAsset {
 	};
 	fileCreatedAt?: string;
 	localDateTime?: string;
+	/** For live photos, the image asset points to its motion video asset */
+	livePhotoVideoId?: string | null;
 }
 
 /* ----- Cache data structures ----- */

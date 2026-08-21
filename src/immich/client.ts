@@ -265,8 +265,56 @@ export class ImmichClient {
 		);
 	}
 
+	private filterOutLivePhotoVideos(assets: ImmichAsset[]): ImmichAsset[] {
+		// Immich links a still image (HEIC/JPEG) to its motion video (MOV)
+		// via `livePhotoVideoId`. We want to keep the still and drop the
+		// video component, but keep standalone videos.
+		const liveVideoIds = new Set<string>();
+		for (const asset of assets) {
+			if (asset.livePhotoVideoId) {
+				liveVideoIds.add(asset.livePhotoVideoId);
+			}
+		}
+		if (liveVideoIds.size > 0) {
+			return assets.filter((a) => !liveVideoIds.has(a.id));
+		}
+
+		// Fallback for older Immich responses or cases where livePhotoVideoId
+		// is missing: HEIC live photos are often stored as IMG_1234.HEIC + IMG_1234.MOV.
+		// If we see a HEIC image and a MOV video sharing the same basename, treat
+		// the MOV as the live-photo motion component and drop it. This keeps
+		// standalone videos (MP4, etc.) and MOVs without a matching HEIC.
+		const heicBasenames = new Set<string>();
+		for (const a of assets) {
+			if (a.type !== 'IMAGE') continue;
+			const name = a.originalFileName;
+			if (!name) continue;
+			const lower = name.toLowerCase();
+			if (lower.endsWith('.heic') || lower.endsWith('.heif')) {
+				const base = name.slice(0, name.lastIndexOf('.')).toLowerCase();
+				if (base) heicBasenames.add(base);
+			}
+		}
+		if (heicBasenames.size === 0) return assets;
+
+		const movIdsToDrop = new Set<string>();
+		for (const a of assets) {
+			if (a.type !== 'VIDEO') continue;
+			const name = a.originalFileName;
+			if (!name) continue;
+			if (!name.toLowerCase().endsWith('.mov')) continue;
+			const base = name.slice(0, name.lastIndexOf('.')).toLowerCase();
+			if (base && heicBasenames.has(base)) {
+				movIdsToDrop.add(a.id);
+			}
+		}
+		if (movIdsToDrop.size === 0) return assets;
+		return assets.filter((a) => !movIdsToDrop.has(a.id));
+	}
+
 	private mapAssetsToPhotos(assets: ImmichAsset[]): ImmichPhoto[] {
-		return assets
+		const withoutLiveVideos = this.filterOutLivePhotoVideos(assets);
+		return withoutLiveVideos
 			.filter((a) => !!a.id)
 			.map((a) => ({
 				assetId: a.id,
@@ -278,6 +326,7 @@ export class ImmichClient {
 					a.localDateTime,
 				originalFileName: a.originalFileName,
 				type: a.type,
+				livePhotoVideoId: a.livePhotoVideoId ?? null,
 			}));
 	}
 

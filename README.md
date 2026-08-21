@@ -1,92 +1,170 @@
-# Obsidian Sample Plugin
+# Obsidian Immich Memories
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+Load photos from your [Immich](https://immich.app) instance for a specific calendar day, parsed from a note's frontmatter. Display them with a single small preview image, a collapsible thumbnail gallery, and a full-size modal viewer.
 
-This project uses TypeScript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in TypeScript Definition format, which contains TSDoc comments describing what it does.
+Codeblock tag: `obsidian-immich-memories` (alias `immich-memories`).
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
+## Features
 
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open modal (simple)" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and outputs a Notice on click.
-- Registers a global interval which logs 'setInterval' to the console.
+- **Frontmatter-driven date**: Reads a date field (default `date`) and timezone field (default `timezone`) from the current note's frontmatter.
+- **Timezone-aware search**: Computes UTC `takenAfter`/`takenBefore` for the whole calendar day in the note's timezone using only `Intl.DateTimeFormat` (handles DST – e.g. `America/New_York` EST -5 vs EDT -4).
+- **Preview + collapsible gallery**: Single 160px preview on top, `<details>` section underneath with grid of thumbnails. Click any thumbnail or preview to open full-size viewer.
+- **Modal viewer**: Keyboard (ArrowLeft/Right, Escape), click-to-next, and touch swipe navigation. Shows filename and taken date. Falls back to preview if original fails.
+- **Local filesystem cache**:
+  - **Asset cache**: Thumbnails and originals cached under `.obsidian/plugins/obsidian-immich-memories/cache/assets/` (or custom vault-relative folder). LRU eviction based on configurable size in MB.
+  - **Date cache**: `date|timezone → assetIds[]` with `timeLastSearched`. Background cleanup evicts entries older than configurable retention days, plus hourly interval and size limit.
+- **Explicit error handling**: Connection failures, 401/403 auth errors, 404 endpoint-not-found (with guidance about base URL vs `/api` suffix and Immich v1.90+ requirement), 400 bad request, and 5xx server errors all show server URL, attempted endpoint/range, server response body, and troubleshooting checklist instead of generic "not found".
+- **Public API** for other plugins/scripts.
 
-## First time developing plugins?
+## Requirements
 
-Quick starting guide for new plugin devs:
+- Immich server (v1.90+ recommended for `/api/search/metadata`)
+- Obsidian 1.3.0+ (uses `setDisabled`, `setHeading`)
 
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `src/main.ts` to `main.js`.
-- Make changes to `src/main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
+## Installation
 
-## Releasing new releases
+### Manual
 
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
+1. Build or download release assets `main.js`, `manifest.json`, `styles.css`.
+2. Copy them to `<Vault>/.obsidian/plugins/obsidian-immich-memories/`.
+3. Reload Obsidian and enable **Immich Memories** in **Settings → Community plugins**.
 
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
+### Development
 
-## Adding your plugin to the community plugin list
+```bash
+npm install
+npm run dev   # watch
+npm run build # production
+npm run lint
+```
 
-- Check the [plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines).
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
+## Usage
 
-## How to use
+Add frontmatter to a daily note:
 
-- Clone this repo.
-- Make sure your NodeJS is at least v18 (`node --version`).
-- `npm i` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
+```yaml
+---
+date: 2023-07-15
+timezone: America/New_York
+---
+```
 
-## Manually installing the plugin
+Then in the note body:
 
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
+````markdown
+```obsidian-immich-memories
+```
+````
 
-## Improve code quality with eslint
+Override inside the block (optional):
 
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code.
-- This project already has eslint preconfigured, you can invoke a check by running`npm run lint`
-- Together with a custom eslint [plugin](https://github.com/obsidianmd/eslint-plugin) for Obsidan specific code guidelines.
-- A GitHub action is preconfigured to automatically lint every commit on all branches.
+````markdown
+```obsidian-immich-memories
+date: 2024-01-02
+timezone: Europe/London
+```
+````
 
-## Funding URL
+Or JSON:
 
-You can include funding URLs where people who use your plugin can financially support it.
+````markdown
+```obsidian-immich-memories
+{"date": "2023-07-15", "timezone": "Asia/Tokyo"}
+```
+````
 
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
+- First render shows `Memory from YYYY-MM-DD` small preview.
+- Click preview or any thumbnail to open modal.
+- Open the `<details>` to reveal full gallery.
 
-```json
-{
-	"fundingUrl": "https://buymeacoffee.com"
+## Settings
+
+**Settings → Immich Memories**
+
+- **Immich server URL**: e.g. `https://immich.example.com`. No trailing slash, no `/api` suffix.
+- **Immich API key**: Create in Immich → Account Settings → API Keys. The plugin sends `x-api-key` header and also appends `?apiKey=` for direct `<img>` loading.
+- **Date field**: Frontmatter field holding date (default `date`). Accepts `YYYY-MM-DD` or ISO.
+- **Timezone field**: Frontmatter field holding IANA timezone (default `timezone`). Falls back to UTC.
+
+### Asset cache
+
+- **Enable asset cache**: Cache thumbs and originals locally.
+- **Asset cache size (MB)**: Max total bytes. LRU eviction.
+- **Asset cache folder**: Custom vault-relative path, e.g. `ImmichCache/assets`. Empty = default inside plugin folder.
+- **Clear asset cache**: Deletes `thumbs/`, `full/`, and `asset-cache.json`. Shows current usage `X MB / limit`.
+
+How it works:
+- Thumbnails cached eagerly after a date search.
+- Fullsize cached on demand when modal opens.
+- `getThumbnailUrl(assetId)` / `getFullsizeUrl(assetId)` return local `app://` resource path if cached, otherwise remote URL.
+
+### Date cache
+
+- **Enable date cache**: Cache `date|timezone → assetIds[]`.
+- **Date cache retention (days)**: Evict entries where `timeLastSearched` older than N days. `0` = never auto-evict.
+- **Clear date cache**: Removes `date-cache.json` mappings (shows entry count).
+- **Run date cleanup now**: Manually triggers LRU by age.
+
+Cleanup runs on startup and every hour; asset size enforced every 30 min.
+
+## Explicit error messages
+
+Instead of generic "not found", the plugin distinguishes:
+
+- **Not configured**: Server URL and/or API key missing – points to Settings.
+- **Network failure**: `Failed to connect to Immich server at <url>. Network error: <cause>. Check URL correctness (no /api), server running, network, self-signed cert`.
+- **401**: Authentication failed – key invalid/expired, regenerate in Immich.
+- **403**: Access forbidden – key lacks permissions.
+- **404**: API endpoint not found – clarifies this is NOT "no photos", but URL/version wrong. Suggests base URL example, Immich v1.90+, reverse proxy blocking POST `/api/search/metadata`.
+- **400**: Bad request – invalid date format/payload.
+- **5xx**: Server error – check Immich logs.
+
+UI displays title, full body, `Server: <url>` and `Requested: <date> in <tz>`, plus bullet-point troubleshooting. Successful empty search shows `No photos found in Immich for <date> – connection succeeded but no assets matched`.
+
+## Public API
+
+Other plugins can access via `app.plugins.plugins['obsidian-immich-memories'].api`:
+
+```ts
+interface ImmichPhoto {
+  assetId: string;
+  thumbnailUrl: string; // local app:// path if cached, else remote URL with ?apiKey
+  fullsizeUrl: string;
+  takenAt?: string;
+  originalFileName?: string;
+}
+
+interface ImmichPublicApi {
+  getPhotosForDate(dateStr: string, timeZone: string): Promise<ImmichPhoto[]>;
+  findPhotos(dateStr: string, timeZone: string): Promise<ImmichPhoto[]>; // alias
+  getThumbnailUrl(assetId: string): string; // local if cached
+  getFullsizeUrl(assetId: string): string;  // local if cached
+  searchByDateRangeTaken(takenAfter: string, takenBefore: string): Promise<ImmichPhoto[]>;
+  clearAssetCache(): Promise<void>;
+  clearDateCache(): Promise<void>;
+  getAssetCacheSizeMB(): number;
 }
 ```
 
-If you have multiple URLs, you can also do:
+- `getPhotosForDate` uses date cache if enabled, otherwise queries Immich, populates date cache, and background-caches thumbnails.
+- URLs can be local filesystem resource paths or remote URLs per spec.
 
-```json
-{
-	"fundingUrl": {
-		"Buy Me a Coffee": "https://buymeacoffee.com",
-		"GitHub Sponsor": "https://github.com/sponsors",
-		"Patreon": "https://www.patreon.com/"
-	}
-}
-```
+Additional utility exposed on plugin instance: `getDayRangeUtc(dateStr, timeZone)` → `{ takenAfter, takenBefore, startUtc, endUtc }`.
 
-## API Documentation
+## Security & Privacy
 
-See https://docs.obsidian.md
+- All requests go directly to your configured Immich server, no third-party services.
+- API key stored in Obsidian's `data.json` inside plugin folder (local only), sent as `x-api-key` header and `?apiKey=` query for image tags.
+- No telemetry.
+
+## Styles
+
+`styles.css` is theme-aware, uses Obsidian CSS variables, minimal layout, no heavy dependencies. Gallery grid, preview, modal nav, and explicit error block with left red border.
+
+## Versioning
+
+Bump version in `manifest.json`, update `versions.json`, create GitHub release with tag matching version (no `v` prefix), attach `manifest.json`, `main.js`, `styles.css`.
+
+## License
+
+0-BSD (see LICENSE)
