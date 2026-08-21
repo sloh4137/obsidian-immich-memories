@@ -320,6 +320,7 @@ export class ImmichClient {
 				assetId: a.id,
 				thumbnailUrl: this.getThumbnailUrl(a.id),
 				fullsizeUrl: this.getFullsizeUrl(a.id),
+				previewUrl: this.getPreviewUrl(a.id),
 				takenAt:
 					a.exifInfo?.dateTimeOriginal ??
 					a.fileCreatedAt ??

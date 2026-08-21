@@ -2,6 +2,8 @@ export interface ImmichPhoto {
 	assetId: string;
 	thumbnailUrl: string;
 	fullsizeUrl: string;
+	/** Higher-quality JPEG preview (size=preview) – ideal for HEIC originals */
+	previewUrl?: string;
 	/** Optional extra metadata if available from Immich */
 	takenAt?: string;
 	originalFileName?: string;
@@ -33,9 +35,6 @@ export interface ImmichSettings {
 	dateCacheRetentionDays: number;
 	/** Optional max entries (0 = unlimited) */
 	dateCacheMaxEntries?: number;
-
-	/** Migration version for live-photo video filtering (clears old date cache once) */
-	dateCacheFilterVersion?: number;
 }
 
 export const DEFAULT_SETTINGS: ImmichSettings = {
@@ -50,7 +49,6 @@ export const DEFAULT_SETTINGS: ImmichSettings = {
 	useDateCache: true,
 	dateCacheRetentionDays: 30,
 	dateCacheMaxEntries: 500,
-	dateCacheFilterVersion: 0,
 };
 
 export interface ImmichPublicApi {
@@ -67,6 +65,8 @@ export interface ImmichPublicApi {
 	getThumbnailUrl(assetId: string): string;
 	/** Get fullsize/original URL for a given assetId */
 	getFullsizeUrl(assetId: string): string;
+	/** Get preview (higher-quality JPEG) URL – ideal for HEIC originals */
+	getPreviewUrl(assetId: string): string;
 
 	/** Low-level helper to fetch raw assets between two UTC ISO timestamps */
 	searchByDateRangeTaken(takenAfter: string, takenBefore: string): Promise<ImmichPhoto[]>;

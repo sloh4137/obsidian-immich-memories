@@ -252,7 +252,8 @@ export function createImmichBlockProcessor(
 	getClient: () => ImmichClient,
 	getSettings: () => ImmichSettings,
 	getAssetCache?: () => AssetFileCache,
-	getDateCache?: () => DateAssetCache
+	getDateCache?: () => DateAssetCache,
+	getPhotosForDate?: () => (dateStr: string, timeZone: string) => Promise<ImmichPhoto[]>
 ) {
 	return async function processor(
 		source: string,
@@ -321,94 +322,75 @@ export function createImmichBlockProcessor(
 
 		let photos: ImmichPhoto[] = [];
 
-		let usedDateCache = false;
-		if (settings.useDateCache && dateCache) {
-			try {
-				const cachedEntry = await dateCache.get(dateStr, timeZoneStr);
-				if (cachedEntry && cachedEntry.assetIds.length > 0) {
-					photos = cachedEntry.assetIds.map((id) => {
-						const thumbLocal = settings.useAssetCache
-							? assetCache?.getThumbnailLocalUrl(id)
-							: null;
-						const fullLocal = settings.useAssetCache
-							? assetCache?.getFullsizeLocalUrl(id)
-							: null;
-						return {
-							assetId: id,
-							thumbnailUrl:
-								thumbLocal ?? client.getThumbnailUrl(id),
-							fullsizeUrl: fullLocal ?? client.getFullsizeUrl(id),
-						};
-					});
-					usedDateCache = photos.length > 0;
-				}
-			} catch {
-				void 0;
-			}
-		}
-
-		if (!usedDateCache) {
-			try {
-				const remotePhotos = await client.getPhotosForDate(
-					dateStr,
-					timeZoneStr
-				);
-
+		try {
+			if (getPhotosForDate) {
+				// Centralized path: date cache, live-photo filtering, and
+				// local file URL mapping are all handled inside
+				// plugin.getPhotosForDate(). External callers and the renderer
+				// now share the exact same caching logic.
+				const fn = getPhotosForDate();
+				photos = await fn(dateStr, timeZoneStr);
+			} else {
+				// Fallback legacy path (kept for backwards compat if only client is provided)
+				// This duplicates logic that now lives in main.ts:getPhotosForDate
+				let usedDateCache = false;
 				if (settings.useDateCache && dateCache) {
 					try {
-						await dateCache.set(
-							dateStr,
-							timeZoneStr,
-							remotePhotos.map((p) => p.assetId)
-						);
+						const cachedEntry = await dateCache.get(dateStr, timeZoneStr);
+						if (cachedEntry && cachedEntry.assetIds.length > 0) {
+							photos = cachedEntry.assetIds.map((id) => {
+								const thumbLocal = settings.useAssetCache ? assetCache?.getThumbnailLocalUrl(id) : null;
+								const fullLocal = settings.useAssetCache ? assetCache?.getFullsizeLocalUrl(id) : null;
+								return {
+									assetId: id,
+									thumbnailUrl: thumbLocal ?? client.getThumbnailUrl(id),
+									fullsizeUrl: fullLocal ?? client.getFullsizeUrl(id),
+									previewUrl: client.getPreviewUrl(id),
+								};
+							});
+							usedDateCache = photos.length > 0;
+						}
 					} catch {
 						void 0;
 					}
 				}
 
-				photos = remotePhotos.map((p) => {
-					const thumbLocal = settings.useAssetCache
-						? assetCache?.getThumbnailLocalUrl(p.assetId)
-						: null;
-					const fullLocal = settings.useAssetCache
-						? assetCache?.getFullsizeLocalUrl(p.assetId)
-						: null;
-					return {
-						...p,
-						thumbnailUrl: thumbLocal ?? p.thumbnailUrl,
-						fullsizeUrl: fullLocal ?? p.fullsizeUrl,
-					};
-				});
+				if (!usedDateCache) {
+					const remotePhotos = await client.getPhotosForDate(dateStr, timeZoneStr);
 
-				if (settings.useAssetCache && assetCache) {
-					const apiKey = settings.immichApiKey;
-					void (async () => {
-						for (const p of remotePhotos) {
-							try {
-								if (assetCache.getThumbnailLocalUrl(p.assetId))
-									continue;
-								await assetCache.ensureThumbnailCached(
-									p.assetId,
-									p.thumbnailUrl,
-									apiKey
-								);
-							} catch {
-								void 0;
-							}
+					if (settings.useDateCache && dateCache) {
+						try {
+							await dateCache.set(
+								dateStr,
+								timeZoneStr,
+								remotePhotos.map((p) => p.assetId)
+							);
+						} catch {
+							void 0;
 						}
-					})();
+					}
+
+					photos = remotePhotos.map((p) => {
+						const thumbLocal = settings.useAssetCache ? assetCache?.getThumbnailLocalUrl(p.assetId) : null;
+						const fullLocal = settings.useAssetCache ? assetCache?.getFullsizeLocalUrl(p.assetId) : null;
+						return {
+							...p,
+							thumbnailUrl: thumbLocal ?? p.thumbnailUrl,
+							fullsizeUrl: fullLocal ?? p.fullsizeUrl,
+							previewUrl: p.previewUrl ?? client.getPreviewUrl(p.assetId),
+						};
+					});
 				}
-			} catch (err: unknown) {
-				loadingEl.remove();
-				createExplicitErrorEl(el, err, settings, dateStr, timeZoneStr);
-				return;
 			}
+		} catch (err: unknown) {
+			loadingEl.remove();
+			createExplicitErrorEl(el, err, settings, dateStr, timeZoneStr);
+			return;
 		}
 
-		// Extra safety: filter out live-photo motion videos at render time.
-		// This covers the case where photos came from a cached list that
-		// already includes livePhotoVideoId metadata, or from remote data
-		// that somehow still contains the linked video.
+		// Extra safety: renderer-level filtering ensures gallery never shows live-photo MOVs,
+		// even if called via legacy client path. When using centralized getPhotosForDate,
+		// this is already filtered, but keeping defense-in-depth.
 		photos = filterLivePhotoVideos(photos);
 
 		loadingEl.remove();

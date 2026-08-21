@@ -30,22 +30,6 @@ export default class ImmichMemoriesPlugin extends Plugin {
 		this.dateCache
 			.initialize()
 			.then(() => this.dateCache.cleanup())
-			.then(() => {
-				// One-time migration: old date caches may contain live-photo
-				// motion videos (MOV) that we now filter out. Clear them once
-				// so next fetch rebuilds without those videos.
-				const v = this.settings.dateCacheFilterVersion ?? 0;
-				if (v < 1) {
-					return this.dateCache
-						.clear()
-						.catch(() => {})
-						.then(() => {
-							this.settings.dateCacheFilterVersion = 1;
-							return this.saveData(this.settings).catch(() => {});
-						});
-				}
-				return;
-			})
 			.catch(() => {});
 
 		this.api = this.buildPublicApi();
@@ -54,12 +38,26 @@ export default class ImmichMemoriesPlugin extends Plugin {
 
 		this.registerMarkdownCodeBlockProcessor(
 			"obsidian-immich-memories",
-			createImmichBlockProcessor(this.app, () => this.client, () => this.settings, () => this.assetCache, () => this.dateCache),
+			createImmichBlockProcessor(
+				this.app,
+				() => this.client,
+				() => this.settings,
+				() => this.assetCache,
+				() => this.dateCache,
+				() => this.getPhotosForDate.bind(this)
+			),
 		);
 
 		this.registerMarkdownCodeBlockProcessor(
 			"immich-memories",
-			createImmichBlockProcessor(this.app, () => this.client, () => this.settings, () => this.assetCache, () => this.dateCache),
+			createImmichBlockProcessor(
+				this.app,
+				() => this.client,
+				() => this.settings,
+				() => this.assetCache,
+				() => this.dateCache,
+				() => this.getPhotosForDate.bind(this)
+			),
 		);
 
 		// Regular cleanup schedule for date cache every hour
@@ -91,8 +89,6 @@ export default class ImmichMemoriesPlugin extends Plugin {
 		if (typeof this.settings.dateCacheRetentionDays !== "number")
 			this.settings.dateCacheRetentionDays = DEFAULT_SETTINGS.dateCacheRetentionDays;
 		if (!this.settings.assetCacheFolder) this.settings.assetCacheFolder = "";
-		if (typeof this.settings.dateCacheFilterVersion !== "number")
-			this.settings.dateCacheFilterVersion = DEFAULT_SETTINGS.dateCacheFilterVersion;
 	}
 
 	async saveSettings() {
@@ -210,6 +206,11 @@ export default class ImmichMemoriesPlugin extends Plugin {
 		return this.client.getFullsizeUrl(assetId);
 	}
 
+	/** Get preview (higher-quality JPEG) URL – useful for HEIC originals */
+	getPreviewUrl(assetId: string): string {
+		return this.client.getPreviewUrl(assetId);
+	}
+
 	/** Helper for range queries */
 	async searchByDateRangeTaken(takenAfter: string, takenBefore: string): Promise<ImmichPhoto[]> {
 		const photos = await this.client.searchByDateRangeTaken(takenAfter, takenBefore);
@@ -227,6 +228,7 @@ export default class ImmichMemoriesPlugin extends Plugin {
 			assetId: id,
 			thumbnailUrl: this.getThumbnailUrl(id),
 			fullsizeUrl: this.getFullsizeUrl(id),
+			previewUrl: this.getPreviewUrl(id),
 		}));
 	}
 
@@ -237,6 +239,7 @@ export default class ImmichMemoriesPlugin extends Plugin {
 			...photo,
 			thumbnailUrl: thumbLocal ?? photo.thumbnailUrl,
 			fullsizeUrl: fullLocal ?? photo.fullsizeUrl,
+			previewUrl: photo.previewUrl ?? this.client.getPreviewUrl(photo.assetId),
 		};
 	}
 
@@ -275,6 +278,7 @@ export default class ImmichMemoriesPlugin extends Plugin {
 			findPhotos: this.findPhotos.bind(this),
 			getThumbnailUrl: this.getThumbnailUrl.bind(this),
 			getFullsizeUrl: this.getFullsizeUrl.bind(this),
+			getPreviewUrl: this.getPreviewUrl.bind(this),
 			searchByDateRangeTaken: this.searchByDateRangeTaken.bind(this),
 			clearAssetCache: this.clearAssetCache.bind(this),
 			clearDateCache: this.clearDateCache.bind(this),

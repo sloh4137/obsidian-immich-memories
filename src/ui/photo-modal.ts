@@ -106,31 +106,44 @@ export class ImmichPhotoModal extends Modal {
 		}
 	}
 
+	private isHeicImage(photo: ImmichPhoto): boolean {
+		const name = photo.originalFileName?.toLowerCase() ?? "";
+		return name.endsWith(".heic") || name.endsWith(".heif");
+	}
+
 	private async loadCurrent(): Promise<void> {
 		const photo = this.photos[this.currentIndex];
 		if (!photo || !this.imgEl) return;
 
 		this.updateCounter();
 
-		// Try to use local fullsize if cached, else remote, and attempt to cache in background
-		let fullUrl = photo.fullsizeUrl;
+		// For HEIC originals, prefer the higher-quality JPEG preview (size=preview)
+		// because HEIC may not render well in some environments and the preview
+		// is a transcoded JPEG. This gives a better experience than the small thumbnail.
+		const isHeic = this.isHeicImage(photo);
+		const remoteHighQualityUrl = isHeic && photo.previewUrl ? photo.previewUrl : photo.fullsizeUrl;
+
+		let fullUrl = remoteHighQualityUrl;
 
 		if (this.assetCache?.isEnabled()) {
-			const localFull = this.assetCache.getFullsizeLocalUrl(photo.assetId);
-			if (localFull) {
-				fullUrl = localFull;
-			} else {
-				// Attempt to cache fullsize now (await with timeout)
-				try {
-					// Note: we don't have apiKey here directly, but cache stores remoteUrl which already includes key in query,
-					// and requestUrl will be called with apiKey from settings via assetCache's ensure method which needs key.
-					// We'll rely on the cache method to fetch using query param url (which includes apiKey) even without header.
-					// For proper behavior, assetCache's ensureFullsizeCached expects remoteUrl and apiKey – we pass empty apiKey and rely on query param
-					const cached = await this.assetCache.ensureFullsizeCached(photo.assetId, photo.fullsizeUrl, "");
-					if (cached) fullUrl = cached;
-				} catch {
-					// ignore
+			try {
+				// Cache the chosen high-quality URL as the "fullsize" entry.
+				// For HEIC this means we cache the JPEG preview, overwriting any
+				// previously cached HEIC original.
+				const cached = await this.assetCache.ensureFullsizeCached(photo.assetId, remoteHighQualityUrl, "");
+				if (cached) {
+					fullUrl = cached;
+				} else {
+					// If caching returned nothing, try existing local file
+					const localFull = this.assetCache.getFullsizeLocalUrl(photo.assetId);
+					if (localFull && !isHeic) {
+						// Only reuse local for non-HEIC; for HEIC we want JPEG preview
+						fullUrl = localFull;
+					}
 				}
+			} catch {
+				// On cache failure, keep remote URL
+				fullUrl = remoteHighQualityUrl;
 			}
 		}
 
@@ -145,14 +158,29 @@ export class ImmichPhotoModal extends Modal {
 		};
 		this.imgEl.onerror = () => {
 			this.imgEl?.classList.remove("is-loading");
-			if (this.imgEl && this.imgEl.src !== photo.thumbnailUrl) {
-				const previewUrl = photo.thumbnailUrl.includes("size=thumbnail")
-					? photo.thumbnailUrl.replace("size=thumbnail", "size=preview")
-					: photo.thumbnailUrl;
-				if (previewUrl !== this.imgEl.src) {
+			if (!this.imgEl) return;
+
+			const currentSrc = this.imgEl.src;
+			const thumbUrl = photo.thumbnailUrl;
+			const previewUrl = photo.previewUrl ?? (thumbUrl.includes("size=thumbnail") ? thumbUrl.replace("size=thumbnail", "size=preview") : thumbUrl);
+			const fullUrlFallback = photo.fullsizeUrl;
+
+			// Fallback chain: if we failed on fullsize/original, try preview JPEG, then thumbnail
+			if (currentSrc !== previewUrl && currentSrc !== thumbUrl) {
+				// First try the JPEG preview (especially useful for HEIC)
+				if (previewUrl && previewUrl !== currentSrc) {
 					this.imgEl.src = previewUrl;
 					return;
 				}
+			}
+			if (currentSrc !== thumbUrl && thumbUrl) {
+				this.imgEl.src = thumbUrl;
+				return;
+			}
+			// If we were already on thumbnail and still failed, try fullsize as last resort if different
+			if (currentSrc !== fullUrlFallback && fullUrlFallback) {
+				this.imgEl.src = fullUrlFallback;
+				return;
 			}
 			new Notice("Failed to load fullsize image; showing thumbnail if available");
 		};

@@ -114,6 +114,7 @@
 /* Collapsible gallery – native details/summary */
 .immich-memories-details {
   border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
   background: var(--background-primary);
   padding: 0;
 }
