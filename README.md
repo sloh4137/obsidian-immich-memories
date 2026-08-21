@@ -8,11 +8,13 @@ Codeblock tag: `obsidian-immich-memories` (alias `immich-memories`).
 
 - **Frontmatter-driven date**: Reads a date field (default `date`) and timezone field (default `timezone`) from the current note's frontmatter.
 - **Timezone-aware search**: Computes UTC `takenAfter`/`takenBefore` for the whole calendar day in the note's timezone using only `Intl.DateTimeFormat` (handles DST – e.g. `America/New_York` EST -5 vs EDT -4).
-- **Preview + collapsible gallery**: Single 160px preview on top, `<details>` section underneath with grid of thumbnails. Click any thumbnail or preview to open full-size viewer.
-- **Modal viewer**: Keyboard (ArrowLeft/Right, Escape), click-to-next, and touch swipe navigation. Shows filename and taken date. Falls back to preview if original fails.
+- **Preview + collapsible gallery**: Single 160px preview on top, `<details>` section underneath with grid of thumbnails. Click any thumbnail or preview to open full-size viewer. Gallery thumbnails have rounded corners (8px) and grow slightly on hover (`scale(1.06)`) with a subtle shadow to indicate hover.
+- **Live-photo aware**: Immich links a still (HEIC/JPEG) to its motion video via `livePhotoVideoId`. The gallery filters out those MOV video components while keeping standalone videos. Fallback: if `livePhotoVideoId` is absent, a `*.HEIC/*.HEIF` + same-basename `*.MOV` pair (e.g. `IMG_1234.HEIC` + `IMG_1234.MOV`) is treated as live-photo and the MOV is dropped.
+- **HEIC high-quality JPEG in modal**: For `.heic/.heif` originals, the full-size modal loads Immich's `size=preview` JPEG (via `getPreviewUrl()`) instead of the raw HEIC, which renders better and is higher quality than the thumbnail. The JPEG preview is cached as the "fullsize" entry for HEIC.
+- **Modal viewer**: Keyboard (ArrowLeft/Right, Escape), click-to-next, and touch swipe navigation. Shows filename and taken date. Fallback chain on error: full/original → preview JPEG → thumbnail.
 - **Local filesystem cache**:
-  - **Asset cache**: Thumbnails and originals cached under `.obsidian/plugins/obsidian-immich-memories/cache/assets/` (or custom vault-relative folder). LRU eviction based on configurable size in MB.
-  - **Date cache**: `date|timezone → assetIds[]` with `timeLastSearched`. Background cleanup evicts entries older than configurable retention days, plus hourly interval and size limit.
+  - **Asset cache**: Thumbnails and originals (and JPEG previews for HEIC) cached under `.obsidian/plugins/obsidian-immich-memories/cache/assets/` (or custom vault-relative folder). LRU eviction based on configurable size in MB.
+  - **Date cache**: `date|timezone → assetIds[]` with `lastSearched`. Background cleanup evicts entries older than configurable retention days, plus hourly interval and size limit. Centralized in `getPhotosForDate()` so both the renderer and external plugins using the public API benefit from the same cache.
 - **Explicit error handling**: Connection failures, 401/403 auth errors, 404 endpoint-not-found (with guidance about base URL vs `/api` suffix and Immich v1.90+ requirement), 400 bad request, and 5xx server errors all show server URL, attempted endpoint/range, server response body, and troubleshooting checklist instead of generic "not found".
 - **Public API** for other plugins/scripts.
 
@@ -75,7 +77,7 @@ Or JSON:
 
 - First render shows `Memory from YYYY-MM-DD` small preview.
 - Click preview or any thumbnail to open modal.
-- Open the `<details>` to reveal full gallery.
+- Open the `<details>` to reveal full gallery (rounded thumbnails, hover grow).
 
 ## Settings
 
@@ -88,24 +90,25 @@ Or JSON:
 
 ### Asset cache
 
-- **Enable asset cache**: Cache thumbs and originals locally.
+- **Enable asset cache**: Cache thumbs and originals (and HEIC preview JPEGs) locally.
 - **Asset cache size (MB)**: Max total bytes. LRU eviction.
 - **Asset cache folder**: Custom vault-relative path, e.g. `ImmichCache/assets`. Empty = default inside plugin folder.
 - **Clear asset cache**: Deletes `thumbs/`, `full/`, and `asset-cache.json`. Shows current usage `X MB / limit`.
 
 How it works:
 - Thumbnails cached eagerly after a date search.
-- Fullsize cached on demand when modal opens.
+- Fullsize cached on demand when modal opens; for HEIC, the preview JPEG (`size=preview`) is cached as fullsize.
 - `getThumbnailUrl(assetId)` / `getFullsizeUrl(assetId)` return local `app://` resource path if cached, otherwise remote URL.
+- `getPreviewUrl(assetId)` returns remote preview JPEG URL (used for HEIC in modal).
 
 ### Date cache
 
 - **Enable date cache**: Cache `date|timezone → assetIds[]`.
-- **Date cache retention (days)**: Evict entries where `timeLastSearched` older than N days. `0` = never auto-evict.
+- **Date cache retention (days)**: Evict entries where `lastSearched` older than N days. `0` = never auto-evict.
 - **Clear date cache**: Removes `date-cache.json` mappings (shows entry count).
 - **Run date cleanup now**: Manually triggers LRU by age.
 
-Cleanup runs on startup and every hour; asset size enforced every 30 min.
+Cleanup runs on startup and every hour; asset size enforced every 30 min. The date cache is now centralized in `plugin.getPhotosForDate()` – both the block renderer and external plugins calling the public API benefit from it.
 
 ## Explicit error messages
 
@@ -129,16 +132,20 @@ Other plugins can access via `app.plugins.plugins['obsidian-immich-memories'].ap
 interface ImmichPhoto {
   assetId: string;
   thumbnailUrl: string; // local app:// path if cached, else remote URL with ?apiKey
-  fullsizeUrl: string;
+  fullsizeUrl: string;  // local app:// if cached, else remote original; for HEIC this may be cached JPEG preview
+  previewUrl?: string;  // remote JPEG preview (size=preview) – ideal for HEIC fullsize modal
   takenAt?: string;
   originalFileName?: string;
+  type?: string; // IMAGE, VIDEO, etc.
+  livePhotoVideoId?: string | null; // if image is live-photo, points to its MOV assetId
 }
 
 interface ImmichPublicApi {
   getPhotosForDate(dateStr: string, timeZone: string): Promise<ImmichPhoto[]>;
-  findPhotos(dateStr: string, timeZone: string): Promise<ImmichPhoto[]>; // alias
+  findPhotos(dateStr: string, timeZone: string): Promise<ImmichPhoto[]>; // alias, uses same date+asset cache
   getThumbnailUrl(assetId: string): string; // local if cached
-  getFullsizeUrl(assetId: string): string;  // local if cached
+  getFullsizeUrl(assetId: string): string;  // local if cached, for HEIC local is JPEG preview after first modal open
+  getPreviewUrl(assetId: string): string;   // remote preview JPEG, never local-cached separately
   searchByDateRangeTaken(takenAfter: string, takenBefore: string): Promise<ImmichPhoto[]>;
   clearAssetCache(): Promise<void>;
   clearDateCache(): Promise<void>;
@@ -146,8 +153,13 @@ interface ImmichPublicApi {
 }
 ```
 
-- `getPhotosForDate` uses date cache if enabled, otherwise queries Immich, populates date cache, and background-caches thumbnails.
-- URLs can be local filesystem resource paths or remote URLs per spec.
+- `getPhotosForDate` is the centralized entry point:
+  - Checks date cache `date|timezone → assetIds[]` if `useDateCache` enabled, returns via `buildPhotosFromAssetIds` with local URLs when available.
+  - Otherwise queries Immich `POST /api/search/metadata`, filters out live-photo motion videos (`livePhotoVideoId` set + HEIC/MOV basename fallback), populates date cache with filtered IDs, and background-caches thumbnails.
+  - Returns `ImmichPhoto[]` with `thumbnailUrl`/`fullsizeUrl` as local `app://` resource paths when cached, else remote URLs; `previewUrl` always remote preview JPEG.
+  - Both the codeblock renderer and external plugins use this same path, so caching and filtering are shared.
+- `searchByDateRangeTaken` also filters live-photo videos and applies local URLs.
+- `getPreviewUrl` is useful for HEIC handling – higher-quality JPEG than thumbnail, smaller than original, transcoded by Immich.
 
 Additional utility exposed on plugin instance: `getDayRangeUtc(dateStr, timeZone)` → `{ takenAfter, takenBefore, startUtc, endUtc }`.
 
@@ -159,7 +171,10 @@ Additional utility exposed on plugin instance: `getDayRangeUtc(dateStr, timeZone
 
 ## Styles
 
-`styles.css` is theme-aware, uses Obsidian CSS variables, minimal layout, no heavy dependencies. Gallery grid, preview, modal nav, and explicit error block with left red border.
+`styles.css` is theme-aware, uses Obsidian CSS variables:
+- Gallery grid with 96px min cells, 6px gap
+- Thumbnails: `border-radius: 8px`, `overflow: hidden`, `transition: transform 0.18s ease`; on hover `scale(1.06)` + shadow, inner image brightens – clear hover affordance.
+- Preview, modal nav, and explicit error block with left red border.
 
 ## Versioning
 
