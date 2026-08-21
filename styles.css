@@ -291,6 +291,139 @@
   font-size: 0.9em;
 }
 
+/* ---- Banner (cssclasses: immichBanner) – mirrors immich-sync-banner pattern ---- */
+.immich-banner {
+  position: relative;
+  width: 100%;
+  height: 280px;
+  overflow: hidden;
+  margin: 0 0 12px 0;
+  border-radius: 8px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  cursor: pointer;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Background: blurred cover for letterbox effect */
+.immich-banner-bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: blur(20px) brightness(0.85) saturate(1.2);
+  transform: scale(1.1);
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+/* Foreground: sharp, contained image centered */
+.immich-banner-fg {
+  position: relative;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  display: block;
+  z-index: 1;
+  transition: transform 0.35s ease, filter 0.25s ease;
+}
+
+.immich-banner:hover .immich-banner-fg {
+  transform: scale(1.02);
+  filter: brightness(1.04);
+}
+
+/* Single-image fallback (old version) */
+.immich-banner-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.35s ease, filter 0.25s ease;
+}
+
+.immich-banner:hover .immich-banner-image {
+  transform: scale(1.03);
+  filter: brightness(1.04);
+}
+
+/* Soft scrim at bottom */
+.immich-banner::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 44%;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.35), rgba(0, 0, 0, 0));
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  z-index: 2;
+}
+
+.immich-banner:hover::after {
+  opacity: 1;
+}
+
+.immich-banner--error {
+  display: none;
+}
+
+.immich-banner:focus-within {
+  outline: 2px solid var(--text-accent);
+  outline-offset: 2px;
+}
+
+.immich-banner-fg:focus,
+.immich-banner-image:focus {
+  outline: none;
+}
+
+.markdown-preview-view .immich-banner {
+  margin-top: 0;
+}
+
+.view-content .immich-banner {
+  z-index: 1;
+}
+
+/* Count badge – bottom right corner */
+.immich-banner-count {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 3;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 0.75em;
+  font-weight: 500;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: 10px;
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.immich-banner-count--hidden {
+  display: none;
+}
+
+/* When mounted inside sizer elements (like sync plugin) */
+.markdown-preview-sizer > .immich-banner,
+.cm-sizer > .immich-banner {
+  width: 100%;
+  margin-bottom: 12px;
+}
+
 /* Settings help */
 .immich-memories-settings-help {
   margin-top: 1em;

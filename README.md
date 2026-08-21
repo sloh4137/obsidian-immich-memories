@@ -1,6 +1,6 @@
 # Obsidian Immich Memories
 
-Load photos from your [Immich](https://immich.app) instance for a specific calendar day, parsed from a note's frontmatter. Display them with a single small preview image, a collapsible thumbnail gallery, and a full-size modal viewer.
+Load photos from your [Immich](https://immich.app) instance for a specific calendar day, parsed from a note's frontmatter. Display them with a single small preview image, a collapsible thumbnail gallery, and a full-size modal viewer. Also supports automatic banner rendering when a note has `cssclasses: immichBanner`.
 
 Codeblock tag: `obsidian-immich-memories` (alias `immich-memories`).
 
@@ -9,6 +9,7 @@ Codeblock tag: `obsidian-immich-memories` (alias `immich-memories`).
 - **Frontmatter-driven date**: Reads a date field (default `date`) and timezone field (default `timezone`) from the current note's frontmatter.
 - **Timezone-aware search**: Computes UTC `takenAfter`/`takenBefore` for the whole calendar day in the note's timezone using only `Intl.DateTimeFormat` (handles DST – e.g. `America/New_York` EST -5 vs EDT -4).
 - **Preview + collapsible gallery**: Single 160px preview on top, `<details>` section underneath with grid of thumbnails. Click any thumbnail or preview to open full-size viewer. Gallery thumbnails have rounded corners (8px) and grow slightly on hover (`scale(1.06)`) with a subtle shadow to indicate hover.
+- **Banner mode (`cssclasses: immichBanner`)**: When a note's frontmatter contains `cssclasses: immichBanner` (or `cssclass`), the plugin automatically renders the first photo from `getPhotosForDate()` as a top banner in both reading and live-preview modes. Mirrors `obsidian-immich-sync/src/render/banner.ts` pattern – mounts into `.markdown-preview-sizer` / `.cm-sizer`, uses `requestAnimationFrame` double-pass refresh (`file-open`, `layout-change`, `active-leaf-change`, `metadataCache.changed`, markdown post-processor). Signature-based dedup (`path + date + timezone`) prevents flicker, race-guarded with request counters. Click banner to open modal gallery, photo count badge in bottom-right.
 - **Live-photo aware**: Immich links a still (HEIC/JPEG) to its motion video via `livePhotoVideoId`. The gallery filters out those MOV video components while keeping standalone videos. Fallback: if `livePhotoVideoId` is absent, a `*.HEIC/*.HEIF` + same-basename `*.MOV` pair (e.g. `IMG_1234.HEIC` + `IMG_1234.MOV`) is treated as live-photo and the MOV is dropped.
 - **HEIC high-quality JPEG in modal**: For `.heic/.heif` originals, the full-size modal loads Immich's `size=preview` JPEG (via `getPreviewUrl()`) instead of the raw HEIC, which renders better and is higher quality than the thumbnail. The JPEG preview is cached as the "fullsize" entry for HEIC.
 - **Modal viewer**: Keyboard (ArrowLeft/Right, Escape), click-to-next, and touch swipe navigation. Shows filename and taken date. Fallback chain on error: full/original → preview JPEG → thumbnail.
@@ -41,6 +42,8 @@ npm run lint
 ```
 
 ## Usage
+
+### Codeblock (memories gallery)
 
 Add frontmatter to a daily note:
 
@@ -78,6 +81,42 @@ Or JSON:
 - First render shows `Memory from YYYY-MM-DD` small preview.
 - Click preview or any thumbnail to open modal.
 - Open the `<details>` to reveal full gallery (rounded thumbnails, hover grow).
+
+### Banner mode (`immichBanner` cssclass)
+
+Add `immichBanner` to your note's `cssclasses` to automatically render the first photo for that note's date as a banner at the top of the view:
+
+```yaml
+---
+date: 2023-07-15
+timezone: America/New_York
+cssclasses:
+  - immichBanner
+---
+```
+
+Or inline:
+
+```yaml
+---
+date: 2023-07-15
+cssclasses: immichBanner
+---
+```
+
+Also supports singular `cssclass`:
+
+```yaml
+cssclass: immichBanner
+```
+
+- Checks `frontmatter.cssclasses` / `cssclass` (string or array, space/comma-separated).
+- If it contains `immichBanner`, extracts `date` (from `settings.dateField` or fallback `date`) and `timezone` (`timezoneField` or `timezone` or `UTC`).
+- Calls `getPhotosForDate(dateStr, timezone)` – uses date cache + asset cache, same path as the codeblock.
+- Renders first photo as `.immich-banner` with blurred background (`-bg`) and sharp foreground (`-fg`), mounted into `.markdown-preview-sizer` (reading) or `.cm-sizer` (live preview) via `host.prepend()`.
+- Bottom-right badge shows total count: `12 photos` (managed via `.immich-banner-count`, hidden until count known).
+- Click banner (or Enter/Space on focused image) opens `ImmichPhotoModal` with all photos for that day.
+- Implements same lifecycle as `obsidian-immich-sync` banner: `file-open`, `layout-change`, `active-leaf-change`, `metadataCache.changed`, markdown post-processor with `requestAnimationFrame` double-pass, signature dedup (`path\ndate\ntimezone`), and removal of stray banners outside current host.
 
 ## Settings
 
@@ -175,6 +214,7 @@ Additional utility exposed on plugin instance: `getDayRangeUtc(dateStr, timeZone
 - Gallery grid with 96px min cells, 6px gap
 - Thumbnails: `border-radius: 8px`, `overflow: hidden`, `transition: transform 0.18s ease`; on hover `scale(1.06)` + shadow, inner image brightens – clear hover affordance.
 - Preview, modal nav, and explicit error block with left red border.
+- Banner: `.immich-banner` 280px height, flex centered, blurred background layer `.immich-banner-bg` (`blur(20px) brightness(0.85) scale(1.1)`) and sharp foreground `.immich-banner-fg` (`object-fit: contain`), hover scale, scrim gradient via `::after`, bottom-right count pill `.immich-banner-count` (`rgba(0,0,0,0.62)`, `backdrop-filter: blur(2px)`, `tabular-nums`), hidden variant `--hidden`. Also supports legacy `.immich-banner-image` single-image fallback. Mounted inside sizer selectors with `width:100%; margin-bottom:12px`.
 
 ## Versioning
 

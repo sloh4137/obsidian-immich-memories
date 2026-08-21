@@ -3,6 +3,7 @@ import { DEFAULT_SETTINGS, ImmichPhoto, ImmichPublicApi, ImmichSettings } from "
 import { ImmichClient } from "./immich/client";
 import { ImmichSettingTab } from "./settings";
 import { createImmichBlockProcessor } from "./ui/renderer";
+import { ImmichBannerManager } from "./ui/banner";
 import { getDayRangeUtc } from "./immich/date-utils";
 import { AssetFileCache, DateAssetCache } from "./cache";
 
@@ -16,6 +17,8 @@ export default class ImmichMemoriesPlugin extends Plugin {
 
 	/** Public API exposed to other plugins via app.plugins.plugins['obsidian-immich-memories'].api */
 	public api!: ImmichPublicApi;
+
+	private bannerManager!: ImmichBannerManager;
 
 	async onload() {
 		await this.loadSettings();
@@ -73,9 +76,20 @@ export default class ImmichMemoriesPlugin extends Plugin {
 				void this.assetCache.enforceSizeLimit();
 			}, 30 * 60 * 1000),
 		);
+
+		// Banner rendering for notes with cssclasses: immichBanner
+		this.bannerManager = new ImmichBannerManager(
+			this.app,
+			() => this.settings,
+			() => this.getPhotosForDate.bind(this),
+			() => this.assetCache
+		);
+		this.bannerManager.initialize(this);
 	}
 
-	onunload() {}
+	onunload() {
+		this.bannerManager?.destroy();
+	}
 
 	async loadSettings() {
 		const loaded = (await this.loadData()) as Partial<ImmichSettings> | null;
