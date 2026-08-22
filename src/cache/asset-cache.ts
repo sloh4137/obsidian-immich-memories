@@ -7,11 +7,15 @@ import { AssetCacheRecord, ImmichSettings } from "../types";
  * (or custom folder if configured).
  */
 
+/** Metadata is written at most once per this window instead of once per mutation. */
+const METADATA_FLUSH_DELAY_MS = 2000;
+
 export class AssetFileCache {
 	private app: App;
 	private getSettings: () => ImmichSettings;
 	private pluginId: string;
 	private initialized = false;
+	private initPromise: Promise<void> | null = null;
 
 	private rootDir = "";
 	private thumbsDir = "";
@@ -20,6 +24,11 @@ export class AssetFileCache {
 
 	private records: Map<string, AssetCacheRecord> = new Map();
 	private totalSizeBytes = 0;
+
+	private dirty = false;
+	private flushTimer: number | null = null;
+	/** Serializes metadata writes so concurrent flushes cannot interleave. */
+	private writeChain: Promise<void> = Promise.resolve();
 
 	constructor(app: App, getSettings: () => ImmichSettings, pluginId: string) {
 		this.app = app;
@@ -39,34 +48,47 @@ export class AssetFileCache {
 		return `${this.app.vault.configDir}/plugins/${this.pluginId}/cache/assets`;
 	}
 
+	/**
+	 * Single-flight: concurrent callers share one promise. Without this, a
+	 * codeblock rendering while onload's unawaited initialize() is still in
+	 * flight starts a second loadMetadata() that resets `records` to an empty
+	 * map, clobbering anything the first pass already added.
+	 */
 	async initialize(): Promise<void> {
 		const newRoot = this.resolveRoot();
-		const newThumbs = `${newRoot}/thumbs`;
-		const newFull = `${newRoot}/full`;
-		const newMeta = `${newRoot}/asset-cache.json`;
 
-		if (this.initialized && newRoot === this.rootDir) {
-			// Already initialized for this root, but ensure dirs exist
-			await this.ensureDir(this.rootDir);
-			await this.ensureDir(this.thumbsDir);
-			await this.ensureDir(this.fullDir);
-			return;
+		if (this.initPromise && newRoot === this.rootDir) {
+			return this.initPromise;
 		}
 
-		// If root changed after initial load, reset records and reload from new location
 		const rootChanged = this.initialized && newRoot !== this.rootDir;
+		if (rootChanged) {
+			// A flush scheduled against the old root must not land in the new one
+			this.cancelPendingFlush();
+		}
 
 		this.rootDir = newRoot;
-		this.thumbsDir = newThumbs;
-		this.fullDir = newFull;
-		this.metaPath = newMeta;
+		this.thumbsDir = `${newRoot}/thumbs`;
+		this.fullDir = `${newRoot}/full`;
+		this.metaPath = `${newRoot}/asset-cache.json`;
 
+		this.initPromise = this.doInitialize(!this.initialized || rootChanged);
+		return this.initPromise;
+	}
+
+	private async doInitialize(needsLoad: boolean): Promise<void> {
 		await this.ensureDir(this.rootDir);
 		await this.ensureDir(this.thumbsDir);
 		await this.ensureDir(this.fullDir);
 
-		if (!this.initialized || rootChanged) {
-			await this.loadMetadata();
+		if (needsLoad) {
+			// Reconcile only when metadata actually parsed — otherwise every
+			// file on disk looks orphaned. Must finish before `initialized` is
+			// set: every writer awaits initialize(), so nothing can create a
+			// file that this pass would then mistake for an orphan.
+			if (await this.loadMetadata()) {
+				await this.removeOrphanFiles();
+			}
 		}
 		this.initialized = true;
 	}
@@ -91,13 +113,14 @@ export class AssetFileCache {
 		}
 	}
 
-	private async loadMetadata(): Promise<void> {
+	/** @returns true only when existing metadata was read and parsed. */
+	private async loadMetadata(): Promise<boolean> {
 		try {
 			const exists = await this.adapter.exists(this.metaPath);
 			if (!exists) {
 				this.records = new Map();
 				this.totalSizeBytes = 0;
-				return;
+				return false;
 			}
 			const data = await this.adapter.read(this.metaPath);
 			const parsed = JSON.parse(data) as AssetCacheRecord[];
@@ -109,21 +132,83 @@ export class AssetFileCache {
 				total += (rec.thumbnailSize || 0) + (rec.fullsizeSize || 0);
 			}
 			this.totalSizeBytes = total;
+			return true;
 		} catch {
 			void 0;
 			this.records = new Map();
 			this.totalSizeBytes = 0;
+			return false;
 		}
 	}
 
-	private async saveMetadata(): Promise<void> {
-		try {
-			const arr = Array.from(this.records.values());
-			await this.adapter.write(this.metaPath, JSON.stringify(arr, null, 2));
-		} catch {
-			void 0;
-			// ignore write errors
+	/**
+	 * Metadata is flushed lazily, so a crash can drop a record while its file
+	 * remains on disk. Such a file is invisible to eviction and would leak
+	 * forever, so reclaim it at load.
+	 */
+	private async removeOrphanFiles(): Promise<void> {
+		const known = new Set<string>();
+		for (const rec of this.records.values()) {
+			if (rec.thumbnailRelativePath) known.add(rec.thumbnailRelativePath);
+			if (rec.fullsizeRelativePath) known.add(rec.fullsizeRelativePath);
 		}
+
+		for (const dir of [this.thumbsDir, this.fullDir]) {
+			for (const name of await this.listFiles(dir)) {
+				const path = `${dir}/${name}`;
+				if (known.has(path)) continue;
+				try {
+					await this.adapter.remove(path);
+				} catch {
+					void 0;
+				}
+			}
+		}
+	}
+
+	/**
+	 * Mark metadata as needing a write. Callers must never await a write on the
+	 * render path: JSON.stringify of the whole record set runs synchronously on
+	 * the caller's stack, so doing it per asset stalls first paint.
+	 */
+	private markDirty(): void {
+		this.dirty = true;
+		if (this.flushTimer !== null) return;
+		this.flushTimer = window.setTimeout(() => {
+			this.flushTimer = null;
+			void this.flush();
+		}, METADATA_FLUSH_DELAY_MS);
+	}
+
+	private cancelPendingFlush(): void {
+		if (this.flushTimer !== null) {
+			window.clearTimeout(this.flushTimer);
+			this.flushTimer = null;
+		}
+		this.dirty = false;
+	}
+
+	private async flush(): Promise<void> {
+		if (!this.dirty) return this.writeChain;
+		this.cancelPendingFlush();
+
+		const payload = JSON.stringify(Array.from(this.records.values()));
+		const path = this.metaPath;
+		this.writeChain = this.writeChain.then(async () => {
+			try {
+				await this.adapter.write(path, payload);
+			} catch {
+				void 0;
+				// ignore write errors
+			}
+		});
+		return this.writeChain;
+	}
+
+	/** Force a write and wait for it. Call on plugin unload/quit. */
+	async flushNow(): Promise<void> {
+		await this.flush();
+		await this.writeChain;
 	}
 
 	isEnabled(): boolean {
@@ -157,15 +242,19 @@ export class AssetFileCache {
 		const rec = this.records.get(assetId);
 		if (rec) {
 			rec.lastAccessed = Date.now();
-			void this.saveMetadata();
+			this.markDirty();
 		}
 	}
+
+	// Note: the URL getters below deliberately do NOT touch the LRU. Building a
+	// URL is not accessing an asset — a gallery render builds one per photo, so
+	// touching here made every original look recently-used and inverted
+	// eviction order. Real access is recorded in the ensure*Cached methods.
 
 	getThumbnailLocalUrl(assetId: string): string | null {
 		if (!this.isEnabled()) return null;
 		const rec = this.records.get(assetId);
 		if (!rec?.thumbnailRelativePath) return null;
-		this.touchRecord(assetId);
 		return this.getResourceUrl(rec.thumbnailRelativePath);
 	}
 
@@ -173,7 +262,6 @@ export class AssetFileCache {
 		if (!this.isEnabled()) return null;
 		const rec = this.records.get(assetId);
 		if (!rec?.fullsizeRelativePath) return null;
-		this.touchRecord(assetId);
 		return this.getResourceUrl(rec.fullsizeRelativePath);
 	}
 
@@ -182,7 +270,16 @@ export class AssetFileCache {
 		return this.getFullsizeLocalUrl(assetId);
 	}
 
-	async ensureThumbnailCached(assetId: string, remoteUrl: string, apiKey: string): Promise<string | null> {
+	/**
+	 * @param deferMaintenance skip the metadata flush and size enforcement so a
+	 * batch caller can do both once at the end instead of per asset.
+	 */
+	async ensureThumbnailCached(
+		assetId: string,
+		remoteUrl: string,
+		apiKey: string,
+		deferMaintenance = false,
+	): Promise<string | null> {
 		if (!this.isEnabled()) return null;
 		await this.initialize();
 
@@ -192,7 +289,10 @@ export class AssetFileCache {
 			if (rec?.thumbnailRelativePath) {
 				try {
 					const exists = await this.adapter.exists(rec.thumbnailRelativePath);
-					if (exists) return existing;
+					if (exists) {
+						this.touchRecord(assetId);
+						return existing;
+					}
 				} catch {
 					void 0;
 					// continue to re-download
@@ -233,8 +333,8 @@ export class AssetFileCache {
 			this.records.set(assetId, rec);
 			this.totalSizeBytes += size;
 
-			await this.saveMetadata();
-			await this.enforceSizeLimit();
+			this.markDirty();
+			if (!deferMaintenance) await this.enforceSizeLimit();
 
 			return this.getResourceUrl(relPath);
 		} catch {
@@ -253,7 +353,10 @@ export class AssetFileCache {
 			if (rec?.fullsizeRelativePath) {
 				try {
 					const exists = await this.adapter.exists(rec.fullsizeRelativePath);
-					if (exists) return existing;
+					if (exists) {
+						this.touchRecord(assetId);
+						return existing;
+					}
 				} catch {
 					void 0;
 					// continue
@@ -294,7 +397,7 @@ export class AssetFileCache {
 			this.records.set(assetId, rec);
 			this.totalSizeBytes += size;
 
-			await this.saveMetadata();
+			this.markDirty();
 			await this.enforceSizeLimit();
 
 			return this.getResourceUrl(relPath);
@@ -336,7 +439,8 @@ export class AssetFileCache {
 			await this.evictRecord(rec.assetId);
 		}
 
-		await this.saveMetadata();
+		this.markDirty();
+		await this.flush();
 	}
 
 	private async evictRecord(assetId: string): Promise<void> {
@@ -372,6 +476,8 @@ export class AssetFileCache {
 
 	async clear(): Promise<void> {
 		await this.initialize();
+		// A queued flush would otherwise re-create the metadata file we delete below
+		this.cancelPendingFlush();
 
 		for (const rec of this.records.values()) {
 			if (rec.thumbnailRelativePath) {
@@ -431,7 +537,8 @@ export class AssetFileCache {
 
 		this.records.clear();
 		this.totalSizeBytes = 0;
-		await this.saveMetadata();
+		this.markDirty();
+		await this.flush();
 	}
 
 	private async listFiles(dir: string): Promise<string[]> {

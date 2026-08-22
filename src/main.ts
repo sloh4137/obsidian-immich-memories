@@ -4,8 +4,11 @@ import { ImmichClient } from "./immich/client";
 import { ImmichSettingTab } from "./settings";
 import { createImmichBlockProcessor } from "./ui/renderer";
 import { ImmichBannerManager } from "./ui/banner";
-import { getDayRangeUtc } from "./immich/date-utils";
+import { getDayRangeUtc, normalizeTimeZone } from "./immich/date-utils";
 import { AssetFileCache, DateAssetCache } from "./cache";
+
+/** Parallel thumbnail downloads during background warming. */
+const THUMBNAIL_WARM_CONCURRENCY = 4;
 
 export default class ImmichMemoriesPlugin extends Plugin {
 	settings!: ImmichSettings;
@@ -14,6 +17,19 @@ export default class ImmichMemoriesPlugin extends Plugin {
 	/** File caches */
 	assetCache!: AssetFileCache;
 	dateCache!: DateAssetCache;
+
+	/** Resolves once both caches have loaded their metadata from disk. */
+	private cacheReady!: Promise<void>;
+
+	/**
+	 * Deduplicates concurrent requests for the same day. A note with both a
+	 * banner and a codeblock would otherwise issue two identical searches, and
+	 * banner sweeps across panes add more.
+	 */
+	private inflight = new Map<string, Promise<ImmichPhoto[]>>();
+
+	/** Assets a warming pass is already downloading, so re-renders don't refetch them. */
+	private warming = new Set<string>();
 
 	/** Public API exposed to other plugins via app.plugins.plugins['obsidian-immich-memories'].api */
 	public api!: ImmichPublicApi;
@@ -28,12 +44,14 @@ export default class ImmichMemoriesPlugin extends Plugin {
 		this.assetCache = new AssetFileCache(this.app, () => this.settings, this.manifest.id);
 		this.dateCache = new DateAssetCache(this.app, () => this.settings, this.manifest.id);
 
-		// Initialize caches in background (don't block startup)
-		this.assetCache.initialize().catch(() => {});
-		this.dateCache
-			.initialize()
-			.then(() => this.dateCache.cleanup())
-			.catch(() => {});
+		// Load cache metadata off the startup path, but keep a handle so reads
+		// can wait for it instead of missing a warm cache and refetching.
+		this.cacheReady = Promise.all([
+			this.assetCache.initialize(),
+			this.dateCache.initialize().then(() => this.dateCache.cleanup()),
+		])
+			.then(() => undefined)
+			.catch(() => undefined);
 
 		this.api = this.buildPublicApi();
 
@@ -85,10 +103,25 @@ export default class ImmichMemoriesPlugin extends Plugin {
 			() => this.assetCache
 		);
 		this.bannerManager.initialize(this);
+
+		// onunload cannot await, so persist pending cache metadata here
+		this.registerEvent(
+			this.app.workspace.on("quit", () => {
+				void this.flushCaches();
+			}),
+		);
 	}
 
 	onunload() {
 		this.bannerManager?.destroy();
+		void this.flushCaches();
+	}
+
+	private async flushCaches(): Promise<void> {
+		await Promise.all([
+			this.assetCache?.flushNow().catch(() => undefined),
+			this.dateCache?.flushNow().catch(() => undefined),
+		]);
 	}
 
 	async loadSettings() {
@@ -156,6 +189,22 @@ export default class ImmichMemoriesPlugin extends Plugin {
 	 * Uses date cache if enabled, and uses asset cache for local URLs.
 	 */
 	async getPhotosForDate(dateStr: string, timeZone: string): Promise<ImmichPhoto[]> {
+		const key = `${dateStr}|${normalizeTimeZone(timeZone)}`;
+		const existing = this.inflight.get(key);
+		if (existing) return existing;
+
+		const request = this.loadPhotosForDate(dateStr, timeZone).finally(() => {
+			this.inflight.delete(key);
+		});
+		this.inflight.set(key, request);
+		return request;
+	}
+
+	private async loadPhotosForDate(dateStr: string, timeZone: string): Promise<ImmichPhoto[]> {
+		// Without this, a render racing onload sees empty cache records and
+		// refetches images that are already on disk.
+		await this.cacheReady;
+
 		// Try date cache first
 		if (this.settings.useDateCache) {
 			try {
@@ -165,7 +214,13 @@ export default class ImmichMemoriesPlugin extends Plugin {
 					// Best-effort filter for cached entries that might still
 					// have livePhotoVideoId metadata (future-proof). Old
 					// entries without that metadata were cleared via migration.
-					return this.filterLivePhotoVideos(cachedPhotos);
+					const filteredCached = this.filterLivePhotoVideos(cachedPhotos);
+					// An interrupted warming pass would otherwise never resume,
+					// leaving these thumbnails fetched remotely forever.
+					if (this.settings.useAssetCache) {
+						void this.cacheThumbnailsInBackground(filteredCached);
+					}
+					return filteredCached;
 				}
 			} catch {
 				// fall through to remote
@@ -259,17 +314,36 @@ export default class ImmichMemoriesPlugin extends Plugin {
 
 	private async cacheThumbnailsInBackground(photos: ImmichPhoto[]): Promise<void> {
 		const apiKey = this.settings.immichApiKey;
-		for (const p of photos) {
-			try {
-				// Only cache if not already cached
-				if (this.assetCache.getThumbnailLocalUrl(p.assetId)) continue;
-				// Use remote thumbnail URL (strip apiKey param to use header version)
-				// The client already builds URL with apiKey query, requestUrl will use header too
-				await this.assetCache.ensureThumbnailCached(p.assetId, p.thumbnailUrl, apiKey);
-			} catch {
-				// ignore per asset
+		const pending = photos.filter(
+			(p) => !this.warming.has(p.assetId) && !this.assetCache.getThumbnailLocalUrl(p.assetId),
+		);
+		if (pending.length === 0) return;
+		for (const p of pending) this.warming.add(p.assetId);
+
+		let next = 0;
+		const worker = async (): Promise<void> => {
+			for (;;) {
+				const photo = pending[next++];
+				if (!photo) return;
+				try {
+					// deferMaintenance: flush metadata and enforce the size
+					// limit once for the whole batch, not per download
+					await this.assetCache.ensureThumbnailCached(photo.assetId, photo.thumbnailUrl, apiKey, true);
+				} catch {
+					// ignore per asset
+				}
 			}
+		};
+
+		const workers = Math.min(THUMBNAIL_WARM_CONCURRENCY, pending.length);
+		try {
+			await Promise.all(Array.from({ length: workers }, () => worker()));
+		} finally {
+			for (const p of pending) this.warming.delete(p.assetId);
 		}
+
+		await this.assetCache.flushNow().catch(() => undefined);
+		await this.assetCache.enforceSizeLimit().catch(() => undefined);
 	}
 
 	/* ---- Cache management for public API ---- */

@@ -1,7 +1,7 @@
 {
-	"name": "obsidian-sample-plugin",
+	"name": "obsidian-immich-memories",
 	"version": "1.0.0",
-	"description": "This is a sample plugin for Obsidian (https://obsidian.md)",
+	"description": "Load photos from Immich for a given day parsed from frontmatter. Displays them via an obsidian-immich-memories codeblock with preview, gallery, and modal viewer.",
 	"main": "main.js",
 	"type": "module",
 	"scripts": {

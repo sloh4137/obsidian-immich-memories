@@ -133,6 +133,9 @@ export class ImmichBannerManager {
 	private getAssetCache: () => AssetFileCache | undefined;
 
 	private requestCounters = new Map<string, number>();
+	private refreshTimer: number | null = null;
+	/** Pending post-processor frames, keyed by path so split panes don't starve each other. */
+	private pendingFrames = new Map<string, number>();
 
 	constructor(
 		app: App,
@@ -155,9 +158,15 @@ export class ImmichBannerManager {
 			});
 		};
 
+		// file-open, layout-change and active-leaf-change all fire on a single
+		// note open; a trailing debounce collapses them into one sweep once the
+		// layout has settled.
 		const refreshDeferred = (): void => {
-			refreshAll();
-			window.requestAnimationFrame(refreshAll);
+			if (this.refreshTimer !== null) window.clearTimeout(this.refreshTimer);
+			this.refreshTimer = window.setTimeout(() => {
+				this.refreshTimer = null;
+				refreshAll();
+			}, 50);
 		};
 
 		plugin.registerEvent(this.app.workspace.on("file-open", refreshDeferred));
@@ -174,26 +183,49 @@ export class ImmichBannerManager {
 			})
 		);
 
-		// Fresh reading-mode renders create .markdown-preview-sizer asynchronously
+		// Fresh reading-mode renders create .markdown-preview-sizer asynchronously.
+		// This runs for every block of every note, so bail synchronously before
+		// scheduling any work when the note isn't a banner note at all.
 		plugin.registerMarkdownPostProcessor((el, ctx) => {
-			window.requestAnimationFrame(() => {
-				const sizer = el.closest(READING_HOST_SELECTOR);
-				if (!(sizer instanceof HTMLElement)) return;
-				const file = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
-				if (!(file instanceof TFile)) return;
-				void this.syncBanner(sizer, file);
-			});
+			const file = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
+			if (!(file instanceof TFile)) return;
+			if (!frontmatterHasImmichBanner(getFileFrontmatter(this.app, file))) return;
+
+			// N blocks of the same note in one render pass share a callback
+			const path = file.path;
+			if (this.pendingFrames.has(path)) return;
+			this.pendingFrames.set(
+				path,
+				window.requestAnimationFrame(() => {
+					this.pendingFrames.delete(path);
+					const sizer = el.closest(READING_HOST_SELECTOR);
+					if (!(sizer instanceof HTMLElement)) return;
+					void this.syncBanner(sizer, file);
+				}),
+			);
 		});
 
+		// Two passes: hosts (.markdown-preview-sizer / .cm-sizer) may not be
+		// mounted on the first tick, and updateBanner bails when the host is
+		// missing. The debounced pass catches them once layout settles.
 		this.app.workspace.onLayoutReady(() => {
+			refreshAll();
 			refreshDeferred();
 		});
 
-		// Initial immediate pass
+		refreshAll();
 		refreshDeferred();
 	}
 
 	destroy(): void {
+		if (this.refreshTimer !== null) {
+			window.clearTimeout(this.refreshTimer);
+			this.refreshTimer = null;
+		}
+		for (const handle of this.pendingFrames.values()) {
+			window.cancelAnimationFrame(handle);
+		}
+		this.pendingFrames.clear();
 		for (const view of getMarkdownViews(this.app)) {
 			removeAllBanners(view);
 		}
@@ -216,16 +248,20 @@ export class ImmichBannerManager {
 			return;
 		}
 
-		await this.syncBanner(host, file);
-		removeBannersExcept(view, host);
+		const changed = await this.syncBanner(host, file);
+		// removeBannersExcept queries the whole rendered note subtree, so skip
+		// it on the common no-op sweep
+		if (changed) removeBannersExcept(view, host);
 	}
 
-	private async syncBanner(host: HTMLElement, file: TFile): Promise<void> {
+	/** @returns false when the banner was already correct and nothing was touched. */
+	private async syncBanner(host: HTMLElement, file: TFile): Promise<boolean> {
 		const fm = getFileFrontmatter(this.app, file);
 
 		if (!frontmatterHasImmichBanner(fm)) {
-			host.querySelectorAll(`:scope > .${BANNER_CLASS}`).forEach((b) => b.remove());
-			return;
+			const stale = host.querySelectorAll(`:scope > .${BANNER_CLASS}`);
+			stale.forEach((b) => b.remove());
+			return stale.length > 0;
 		}
 
 		const settings = this.getSettings();
@@ -234,8 +270,9 @@ export class ImmichBannerManager {
 			extractFrontmatterString(fm, "date");
 
 		if (!dateStr) {
-			host.querySelectorAll(`:scope > .${BANNER_CLASS}`).forEach((b) => b.remove());
-			return;
+			const stale = host.querySelectorAll(`:scope > .${BANNER_CLASS}`);
+			stale.forEach((b) => b.remove());
+			return stale.length > 0;
 		}
 
 		const timeZoneStr =
@@ -250,11 +287,12 @@ export class ImmichBannerManager {
 			firstChild.classList.contains(BANNER_CLASS) &&
 			firstChild.dataset.signature === signature
 		) {
-			return;
+			return false;
 		}
 
 		host.querySelectorAll(`:scope > .${BANNER_CLASS}`).forEach((b) => b.remove());
 		await this.mountBanner(host, file, dateStr, timeZoneStr, signature);
+		return true;
 	}
 
 	private async mountBanner(
@@ -278,6 +316,9 @@ export class ImmichBannerManager {
 
 		const fg = banner.createEl("img", { cls: `${BANNER_CLASS}-fg` });
 		fg.alt = dateStr;
+		// Above the fold by definition
+		fg.loading = "eager";
+		fg.setAttribute("fetchpriority", "high");
 
 		const countBadge = banner.createDiv({ cls: `${BANNER_CLASS}-count` });
 		// Hide until we know the count
@@ -326,7 +367,9 @@ export class ImmichBannerManager {
 				return;
 			}
 
-			bg.src = src;
+			// bg is blurred 20px in CSS, so a thumbnail is indistinguishable
+			// from the preview and far cheaper to decode and blur
+			bg.src = first.thumbnailUrl || src;
 			fg.src = src;
 			fg.alt = first.originalFileName || dateStr;
 
@@ -338,7 +381,7 @@ export class ImmichBannerManager {
 			const assetCache = this.getAssetCache();
 
 			const openModal = () => {
-				new ImmichPhotoModal(this.app, photos, 0, assetCache).open();
+				new ImmichPhotoModal(this.app, photos, 0, assetCache, this.getSettings().immichApiKey).open();
 			};
 
 			banner.addEventListener("click", openModal);

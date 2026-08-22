@@ -7,6 +7,9 @@ import { normalizeTimeZone } from "../immich/date-utils";
  * Stores entries with lastSearched timestamp for cleanup.
  */
 
+/** Entries are written at most once per this window instead of once per read. */
+const FLUSH_DELAY_MS = 2000;
+
 export class DateAssetCache {
 	private app: App;
 	private getSettings: () => ImmichSettings;
@@ -17,6 +20,10 @@ export class DateAssetCache {
 	private metaPath = "";
 
 	private records: Map<string, DateCacheEntry> = new Map();
+
+	private dirty = false;
+	private flushTimer: number | null = null;
+	private writeChain: Promise<void> = Promise.resolve();
 
 	constructor(app: App, getSettings: () => ImmichSettings, pluginId: string) {
 		this.app = app;
@@ -42,6 +49,10 @@ export class DateAssetCache {
 		}
 
 		const rootChanged = this.initialized && newRoot !== this.rootDir;
+		if (rootChanged) {
+			// A flush scheduled against the old root must not land in the new one
+			this.cancelPendingFlush();
+		}
 		this.rootDir = newRoot;
 		this.metaPath = newMeta;
 		await this.ensureDir(this.rootDir);
@@ -79,13 +90,47 @@ export class DateAssetCache {
 		}
 	}
 
-	private async save(): Promise<void> {
-		try {
-			const arr = Array.from(this.records.values());
-			await this.app.vault.adapter.write(this.metaPath, JSON.stringify(arr, null, 2));
-		} catch {
-			void 0;
+	/**
+	 * Entries can hold up to 1000 asset IDs each, so stringifying the whole set
+	 * is expensive. Never do it inline on a read.
+	 */
+	private markDirty(): void {
+		this.dirty = true;
+		if (this.flushTimer !== null) return;
+		this.flushTimer = window.setTimeout(() => {
+			this.flushTimer = null;
+			void this.save();
+		}, FLUSH_DELAY_MS);
+	}
+
+	private cancelPendingFlush(): void {
+		if (this.flushTimer !== null) {
+			window.clearTimeout(this.flushTimer);
+			this.flushTimer = null;
 		}
+		this.dirty = false;
+	}
+
+	private async save(): Promise<void> {
+		if (!this.dirty) return this.writeChain;
+		this.cancelPendingFlush();
+
+		const payload = JSON.stringify(Array.from(this.records.values()));
+		const path = this.metaPath;
+		this.writeChain = this.writeChain.then(async () => {
+			try {
+				await this.app.vault.adapter.write(path, payload);
+			} catch {
+				void 0;
+			}
+		});
+		return this.writeChain;
+	}
+
+	/** Force a write and wait for it. Call on plugin unload/quit. */
+	async flushNow(): Promise<void> {
+		await this.save();
+		await this.writeChain;
 	}
 
 	isEnabled(): boolean {
@@ -105,7 +150,7 @@ export class DateAssetCache {
 		if (!rec) return null;
 		rec.lastSearched = Date.now();
 		this.records.set(key, rec);
-		void this.save();
+		this.markDirty();
 		return rec;
 	}
 
@@ -142,7 +187,7 @@ export class DateAssetCache {
 			}
 		}
 
-		await this.save();
+		this.markDirty();
 	}
 
 	async cleanup(): Promise<number> {
@@ -159,6 +204,7 @@ export class DateAssetCache {
 			}
 		}
 		if (evicted > 0) {
+			this.markDirty();
 			await this.save();
 		}
 		return evicted;
@@ -166,6 +212,8 @@ export class DateAssetCache {
 
 	async clear(): Promise<void> {
 		await this.initialize();
+		// A queued flush would otherwise re-create the file we delete below
+		this.cancelPendingFlush();
 		this.records.clear();
 		try {
 			if (await this.app.vault.adapter.exists(this.metaPath)) {
@@ -174,6 +222,7 @@ export class DateAssetCache {
 		} catch {
 			void 0;
 		}
+		this.markDirty();
 		await this.save();
 	}
 

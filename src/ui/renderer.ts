@@ -7,51 +7,6 @@ import { AssetFileCache, DateAssetCache } from '../cache';
 type FrontmatterValue = string | number | boolean | Date | null | undefined;
 type FrontmatterRecord = Record<string, FrontmatterValue>;
 
-/**
- * Filter out live-photo motion videos (MOV) while keeping the still image.
- * Immich links still -> video via `livePhotoVideoId`. We collect all video
- * ids referenced by any photo and drop photos whose own assetId is in that set.
- * Regular standalone videos are not referenced this way and are kept.
- *
- * Fallback: when livePhotoVideoId is absent (older cache or API), treat
- * HEIC + same-basename MOV as live-photo pair and drop the MOV.
- */
-function filterLivePhotoVideos(photos: ImmichPhoto[]): ImmichPhoto[] {
-	const liveVideoIds = new Set<string>();
-	for (const p of photos) {
-		if (p.livePhotoVideoId) liveVideoIds.add(p.livePhotoVideoId);
-	}
-	if (liveVideoIds.size > 0) {
-		return photos.filter((p) => !liveVideoIds.has(p.assetId));
-	}
-
-	// Fallback heuristic for HEIC live photos
-	const heicBasenames = new Set<string>();
-	for (const p of photos) {
-		if (p.type !== 'IMAGE') continue;
-		const name = p.originalFileName;
-		if (!name) continue;
-		const lower = name.toLowerCase();
-		if (lower.endsWith('.heic') || lower.endsWith('.heif')) {
-			const base = name.slice(0, name.lastIndexOf('.')).toLowerCase();
-			if (base) heicBasenames.add(base);
-		}
-	}
-	if (heicBasenames.size === 0) return photos;
-
-	const movIds = new Set<string>();
-	for (const p of photos) {
-		if (p.type !== 'VIDEO') continue;
-		const name = p.originalFileName;
-		if (!name) continue;
-		if (!name.toLowerCase().endsWith('.mov')) continue;
-		const base = name.slice(0, name.lastIndexOf('.')).toLowerCase();
-		if (base && heicBasenames.has(base)) movIds.add(p.assetId);
-	}
-	if (movIds.size === 0) return photos;
-	return photos.filter((p) => !movIds.has(p.assetId));
-}
-
 function getFrontmatter(
 	app: App,
 	sourcePath: string
@@ -388,11 +343,6 @@ export function createImmichBlockProcessor(
 			return;
 		}
 
-		// Extra safety: renderer-level filtering ensures gallery never shows live-photo MOVs,
-		// even if called via legacy client path. When using centralized getPhotosForDate,
-		// this is already filtered, but keeping defense-in-depth.
-		photos = filterLivePhotoVideos(photos);
-
 		loadingEl.remove();
 
 		if (photos.length === 0) {
@@ -420,10 +370,16 @@ export function createImmichBlockProcessor(
 		});
 		previewImg.src = firstPhoto.thumbnailUrl;
 		previewImg.alt = firstPhoto.originalFileName || 'Preview';
-		previewImg.loading = 'lazy';
+		// Above the fold: lazy would defer it past layout
+		previewImg.loading = 'eager';
+		previewImg.setAttr('fetchpriority', 'high');
+
+		const openModal = (index: number) => {
+			new ImmichPhotoModal(app, photos, index, assetCache, settings.immichApiKey).open();
+		};
 
 		previewImg.addEventListener('click', () => {
-			new ImmichPhotoModal(app, photos, 0, assetCache).open();
+			openModal(0);
 		});
 
 		const details = container.createEl('details', {
@@ -436,31 +392,53 @@ export function createImmichBlockProcessor(
 
 		const gallery = details.createDiv({ cls: 'immich-memories-gallery' });
 
-		for (let i = 0; i < photos.length; i++) {
-			const photo = photos[i];
-			if (!photo) continue;
-			const thumbWrapper = gallery.createDiv({
-				cls: 'immich-memories-thumb-wrapper',
-			});
-			const thumb = thumbWrapper.createEl('img', {
-				cls: 'immich-memories-thumb',
-			});
-			thumb.src = photo.thumbnailUrl;
-			thumb.alt = photo.originalFileName || `Photo ${i + 1}`;
-			thumb.loading = 'lazy';
-			thumb.setAttr('data-asset-id', photo.assetId);
+		// One delegated pair of listeners instead of two per thumbnail
+		const indexFromEvent = (e: Event): number | null => {
+			const target = e.target;
+			if (!(target instanceof HTMLElement)) return null;
+			const thumb = target.closest('.immich-memories-thumb');
+			if (!(thumb instanceof HTMLElement)) return null;
+			const index = Number(thumb.dataset.index);
+			return Number.isInteger(index) ? index : null;
+		};
 
-			thumb.addEventListener('click', () => {
-				new ImmichPhotoModal(app, photos, i, assetCache).open();
-			});
+		gallery.addEventListener('click', (e) => {
+			const index = indexFromEvent(e);
+			if (index !== null) openModal(index);
+		});
 
-			thumb.tabIndex = 0;
-			thumb.addEventListener('keydown', (e) => {
-				if (e.key === 'Enter' || e.key === ' ') {
-					e.preventDefault();
-					new ImmichPhotoModal(app, photos, i, assetCache).open();
-				}
-			});
-		}
+		gallery.addEventListener('keydown', (e) => {
+			if (e.key !== 'Enter' && e.key !== ' ') return;
+			const index = indexFromEvent(e);
+			if (index === null) return;
+			e.preventDefault();
+			openModal(index);
+		});
+
+		// Built on first expand: a day can hold up to 1000 photos, and creating
+		// that many elements up front costs a visibly slower first paint for
+		// content the user may never open.
+		let galleryBuilt = false;
+		details.addEventListener('toggle', () => {
+			if (galleryBuilt || !details.open) return;
+			galleryBuilt = true;
+
+			for (let i = 0; i < photos.length; i++) {
+				const photo = photos[i];
+				if (!photo) continue;
+				const thumbWrapper = gallery.createDiv({
+					cls: 'immich-memories-thumb-wrapper',
+				});
+				const thumb = thumbWrapper.createEl('img', {
+					cls: 'immich-memories-thumb',
+				});
+				thumb.src = photo.thumbnailUrl;
+				thumb.alt = photo.originalFileName || `Photo ${i + 1}`;
+				thumb.loading = 'lazy';
+				thumb.dataset.assetId = photo.assetId;
+				thumb.dataset.index = String(i);
+				thumb.tabIndex = 0;
+			}
+		});
 	};
 }

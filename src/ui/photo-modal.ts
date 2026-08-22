@@ -10,12 +10,22 @@ export class ImmichPhotoModal extends Modal {
 	private counterEl: HTMLElement | null = null;
 	private container: HTMLElement | null = null;
 	private assetCache?: AssetFileCache;
+	private apiKey: string;
+	/** Invalidates in-flight loads when the user pages away. */
+	private loadToken = 0;
 
-	constructor(app: App, photos: ImmichPhoto[], startIndex = 0, assetCache?: AssetFileCache) {
+	constructor(
+		app: App,
+		photos: ImmichPhoto[],
+		startIndex = 0,
+		assetCache?: AssetFileCache,
+		apiKey = "",
+	) {
 		super(app);
 		this.photos = photos;
 		this.currentIndex = Math.max(0, Math.min(startIndex, photos.length - 1));
 		this.assetCache = assetCache;
+		this.apiKey = apiKey;
 	}
 
 	onOpen(): void {
@@ -115,6 +125,8 @@ export class ImmichPhotoModal extends Modal {
 		const photo = this.photos[this.currentIndex];
 		if (!photo || !this.imgEl) return;
 
+		const token = ++this.loadToken;
+
 		this.updateCounter();
 
 		// For HEIC originals, prefer the higher-quality JPEG preview (size=preview)
@@ -123,34 +135,18 @@ export class ImmichPhotoModal extends Modal {
 		const isHeic = this.isHeicImage(photo);
 		const remoteHighQualityUrl = isHeic && photo.previewUrl ? photo.previewUrl : photo.fullsizeUrl;
 
-		let fullUrl = remoteHighQualityUrl;
+		// Paint whatever is already warm before touching the network. requestUrl
+		// buffers the entire response before resolving, so awaiting the download
+		// first leaves the modal blank for seconds on a large original.
+		// Order matters: a locally cached thumbnail costs no network at all,
+		// whereas previewUrl is a fresh (if quick) fetch.
+		const localFull = !isHeic ? (this.assetCache?.getFullsizeLocalUrl(photo.assetId) ?? null) : null;
+		const localThumb = this.assetCache?.getThumbnailLocalUrl(photo.assetId) ?? null;
+		const immediateUrl =
+			localFull ?? localThumb ?? photo.previewUrl ?? photo.thumbnailUrl ?? remoteHighQualityUrl;
 
-		if (this.assetCache?.isEnabled()) {
-			try {
-				// Cache the chosen high-quality URL as the "fullsize" entry.
-				// For HEIC this means we cache the JPEG preview, overwriting any
-				// previously cached HEIC original.
-				const cached = await this.assetCache.ensureFullsizeCached(photo.assetId, remoteHighQualityUrl, "");
-				if (cached) {
-					fullUrl = cached;
-				} else {
-					// If caching returned nothing, try existing local file
-					const localFull = this.assetCache.getFullsizeLocalUrl(photo.assetId);
-					if (localFull && !isHeic) {
-						// Only reuse local for non-HEIC; for HEIC we want JPEG preview
-						fullUrl = localFull;
-					}
-				}
-			} catch {
-				// On cache failure, keep remote URL
-				fullUrl = remoteHighQualityUrl;
-			}
-		}
-
-		if (!this.imgEl) return;
 		this.imgEl.classList.add("is-loading");
-		// Update src
-		this.imgEl.src = fullUrl;
+		this.imgEl.src = immediateUrl;
 		this.imgEl.alt = photo.originalFileName || `Photo ${photo.assetId}`;
 
 		this.imgEl.onload = () => {
@@ -196,6 +192,31 @@ export class ImmichPhotoModal extends Modal {
 					this.captionEl.createSpan({ text: date, cls: "immich-memories-taken-at" });
 				}
 			}
+		}
+
+		// Still called when localFull is set: it verifies the file and records
+		// the LRU access, then returns the same URL so no reassignment happens.
+		let fullUrl = localFull ?? remoteHighQualityUrl;
+		if (this.assetCache?.isEnabled()) {
+			try {
+				// Cache the chosen high-quality URL as the "fullsize" entry.
+				// For HEIC this means we cache the JPEG preview, overwriting any
+				// previously cached HEIC original.
+				const cached = await this.assetCache.ensureFullsizeCached(
+					photo.assetId,
+					remoteHighQualityUrl,
+					this.apiKey,
+				);
+				if (cached) fullUrl = cached;
+			} catch {
+				fullUrl = localFull ?? remoteHighQualityUrl;
+			}
+		}
+
+		// The user may have paged away while the original downloaded
+		if (token !== this.loadToken || !this.imgEl) return;
+		if (fullUrl && fullUrl !== immediateUrl) {
+			this.imgEl.src = fullUrl;
 		}
 	}
 
