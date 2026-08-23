@@ -198,13 +198,28 @@
   outline-offset: -2px;
 }
 
-/* Modal */
+/* Modal – constant size, no layout shift when paging through photos */
+.modal.immich-memories-modal {
+  display: flex;
+  flex-direction: column;
+  width: 85vw;
+  max-width: 960px;
+  height: 85vh;
+  max-height: 86vh;
+  overflow: hidden;
+}
+
 .immich-memories-modal .modal-content,
 .immich-memories-modal-content {
   display: flex;
   flex-direction: column;
   gap: 0;
   padding: 0;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  height: 100%;
+  width: 100%;
 }
 
 .immich-memories-modal-header {
@@ -213,6 +228,7 @@
   align-items: center;
   padding: 0.6em 0.8em;
   border-bottom: 1px solid var(--background-modifier-border);
+  flex-shrink: 0;
 }
 
 .immich-memories-modal-counter {
@@ -226,13 +242,17 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--background-primary);
-  min-height: 240px;
+  background: var(--background-secondary);
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .immich-memories-modal-image {
+  width: 100%;
+  height: 100%;
   max-width: 100%;
-  max-height: 78vh;
+  max-height: 100%;
   object-fit: contain;
   display: block;
   cursor: zoom-out;
@@ -258,10 +278,13 @@
   line-height: 1;
   cursor: pointer;
   z-index: 1;
+  border-radius: 999px;
+  opacity: 0.9;
 }
 
 .immich-memories-modal-nav:hover {
   background: var(--background-modifier-hover);
+  opacity: 1;
 }
 
 .immich-memories-modal-prev {
@@ -279,16 +302,83 @@
   padding: 0.6em 0.8em;
   border-top: 1px solid var(--background-modifier-border);
   font-size: 0.85em;
+  flex-shrink: 0;
+  min-height: 3.2em;
+  justify-content: center;
 }
 
 .immich-memories-filename {
   color: var(--text-normal);
   word-break: break-all;
+  line-height: 1.3;
+  min-height: 1.3em;
 }
 
 .immich-memories-taken-at {
   color: var(--text-muted);
   font-size: 0.9em;
+  line-height: 1.2;
+  min-height: 1.2em;
+}
+
+/* Small screens – full screen modal, regular modal on medium+ */
+@media (max-width: 768px) {
+  .modal.immich-memories-modal {
+    position: fixed !important;
+    inset: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    height: 100dvh !important;
+    max-width: 100vw !important;
+    max-height: 100vh !important;
+    max-height: 100dvh !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+    border: none !important;
+  }
+
+  .modal.immich-memories-modal .modal-content,
+  .immich-memories-modal-content {
+    height: 100vh;
+    height: 100dvh;
+    max-height: 100vh;
+    max-height: 100dvh;
+    width: 100vw;
+    max-width: 100vw;
+    border-radius: 0;
+  }
+
+  .immich-memories-modal-wrapper {
+    background: #000;
+  }
+
+  .immich-memories-modal-image {
+    background: #000;
+  }
+
+  .immich-memories-modal-header {
+    background: var(--background-primary);
+    padding: 0.7em 0.9em;
+  }
+
+  .immich-memories-modal-caption {
+    background: var(--background-primary);
+    padding: 0.7em 0.9em;
+    min-height: 3.5em;
+  }
+
+  .immich-memories-modal-nav {
+    width: 44px;
+    height: 44px;
+    font-size: 24px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.25);
+  }
+
+  .immich-memories-modal-nav:hover {
+    background: rgba(0, 0, 0, 0.75);
+  }
 }
 
 /* ---- Banner (cssclasses: immichBanner) – mirrors immich-sync-banner pattern ---- */

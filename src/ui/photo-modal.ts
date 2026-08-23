@@ -8,6 +8,8 @@ export class ImmichPhotoModal extends Modal {
 	private imgEl: HTMLImageElement | null = null;
 	private captionEl: HTMLElement | null = null;
 	private counterEl: HTMLElement | null = null;
+	private filenameEl: HTMLElement | null = null;
+	private takenAtEl: HTMLElement | null = null;
 	private container: HTMLElement | null = null;
 	private assetCache?: AssetFileCache;
 	private apiKey: string;
@@ -61,6 +63,10 @@ export class ImmichPhotoModal extends Modal {
 		nextBtn.addEventListener("click", () => this.showNext());
 
 		this.captionEl = contentEl.createDiv({ cls: "immich-memories-modal-caption" });
+		// Create persistent caption children once so navigating does not destroy/recreate
+		// DOM nodes and cause a flash, especially when images are already cached locally.
+		this.filenameEl = this.captionEl.createSpan({ cls: "immich-memories-filename" });
+		this.takenAtEl = this.captionEl.createSpan({ cls: "immich-memories-taken-at" });
 
 		this.container = wrapper;
 
@@ -106,6 +112,8 @@ export class ImmichPhotoModal extends Modal {
 		contentEl.empty();
 		this.imgEl = null;
 		this.captionEl = null;
+		this.filenameEl = null;
+		this.takenAtEl = null;
 		this.counterEl = null;
 		this.container = null;
 	}
@@ -145,8 +153,19 @@ export class ImmichPhotoModal extends Modal {
 		const immediateUrl =
 			localFull ?? localThumb ?? photo.previewUrl ?? photo.thumbnailUrl ?? remoteHighQualityUrl;
 
-		this.imgEl.classList.add("is-loading");
-		this.imgEl.src = immediateUrl;
+		// If the immediate URL is already a local file (cached), avoid the loading flash
+		// — the image will paint synchronously from disk, so keeping opacity 1 prevents
+		// a brief dimmed state. For remote URLs we keep the loading indicator.
+		const isImmediateRemote = immediateUrl.startsWith("http://") || immediateUrl.startsWith("https://");
+		if (isImmediateRemote) {
+			this.imgEl.classList.add("is-loading");
+		} else {
+			this.imgEl.classList.remove("is-loading");
+		}
+		// Only assign if changed to avoid spurious reloads when navigating quickly
+		if (this.imgEl.src !== immediateUrl) {
+			this.imgEl.src = immediateUrl;
+		}
 		this.imgEl.alt = photo.originalFileName || `Photo ${photo.assetId}`;
 
 		this.imgEl.onload = () => {
@@ -181,17 +200,16 @@ export class ImmichPhotoModal extends Modal {
 			new Notice("Failed to load fullsize image; showing thumbnail if available");
 		};
 
-		if (this.captionEl) {
-			this.captionEl.empty();
-			if (photo.originalFileName) {
-				this.captionEl.createSpan({ text: photo.originalFileName, cls: "immich-memories-filename" });
-			}
-			if (photo.takenAt) {
-				const date = this.formatDate(photo.takenAt);
-				if (date) {
-					this.captionEl.createSpan({ text: date, cls: "immich-memories-taken-at" });
-				}
-			}
+		// Update persistent caption elements without destroying/recreating nodes
+		// to avoid flashing when loading from cache and to keep layout stable.
+		if (this.filenameEl) {
+			this.filenameEl.setText(photo.originalFileName ?? "");
+			this.filenameEl.style.display = photo.originalFileName ? "" : "none";
+		}
+		if (this.takenAtEl) {
+			const date = photo.takenAt ? this.formatDate(photo.takenAt) : "";
+			this.takenAtEl.setText(date);
+			this.takenAtEl.style.display = date ? "" : "none";
 		}
 
 		// Still called when localFull is set: it verifies the file and records
