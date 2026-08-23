@@ -368,11 +368,18 @@ export function createImmichBlockProcessor(
 		const previewImg = previewSection.createEl('img', {
 			cls: 'immich-memories-preview-img',
 		});
-		previewImg.src = firstPhoto.thumbnailUrl;
+		// Middle quality: preview (~1440px) instead of tiny thumbnail
+		previewImg.src = firstPhoto.previewUrl || firstPhoto.thumbnailUrl;
 		previewImg.alt = firstPhoto.originalFileName || 'Preview';
 		// Above the fold: lazy would defer it past layout
 		previewImg.loading = 'eager';
 		previewImg.setAttr('fetchpriority', 'high');
+		previewImg.addEventListener('error', () => {
+			const fallback = firstPhoto.thumbnailUrl;
+			if (fallback && previewImg.src !== fallback) {
+				previewImg.src = fallback;
+			}
+		});
 
 		const openModal = (index: number) => {
 			new ImmichPhotoModal(app, photos, index, assetCache, settings.immichApiKey).open();
@@ -432,12 +439,20 @@ export function createImmichBlockProcessor(
 				const thumb = thumbWrapper.createEl('img', {
 					cls: 'immich-memories-thumb',
 				});
-				thumb.src = photo.thumbnailUrl;
+				// Middle quality: preview with thumbnail fallback
+				thumb.src = photo.previewUrl || photo.thumbnailUrl;
 				thumb.alt = photo.originalFileName || `Photo ${i + 1}`;
 				thumb.loading = 'lazy';
 				thumb.dataset.assetId = photo.assetId;
 				thumb.dataset.index = String(i);
 				thumb.tabIndex = 0;
+				thumb.addEventListener('error', () => {
+					const fallback = photo.thumbnailUrl;
+					if (fallback && thumb.src !== fallback) {
+						// Remove preview from src to prevent loop, fall back to cached/local thumbnail
+						thumb.src = fallback;
+					}
+				});
 			}
 		});
 	};

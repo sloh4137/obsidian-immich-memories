@@ -328,7 +328,9 @@ export default class ImmichMemoriesPlugin extends Plugin {
 				try {
 					// deferMaintenance: flush metadata and enforce the size
 					// limit once for the whole batch, not per download
-					await this.assetCache.ensureThumbnailCached(photo.assetId, photo.thumbnailUrl, apiKey, true);
+					// Use preview (medium quality) for better thumbs, fallback to thumbnail
+					const urlToCache = photo.previewUrl || photo.thumbnailUrl;
+					await this.assetCache.ensureThumbnailCached(photo.assetId, urlToCache, apiKey, true);
 				} catch {
 					// ignore per asset
 				}
