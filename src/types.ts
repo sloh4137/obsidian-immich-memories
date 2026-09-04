@@ -28,6 +28,10 @@ export interface ImmichSettings {
 	/** Optional custom folder relative to vault root; defaults to .obsidian/plugins/<id>/cache */
 	assetCacheFolder?: string;
 
+	/* ---- Photo viewer ---- */
+	/** Swipe up on the photo to close the viewer modal. */
+	swipeUpToClose: boolean;
+
 	/* ---- Date -> assetIds cache ---- */
 	/** Whether to cache date queries */
 	useDateCache: boolean;
@@ -46,6 +50,7 @@ export const DEFAULT_SETTINGS: ImmichSettings = {
 	useAssetCache: true,
 	assetCacheSizeMB: 200,
 	assetCacheFolder: "",
+	swipeUpToClose: true,
 	useDateCache: true,
 	dateCacheRetentionDays: 30,
 	dateCacheMaxEntries: 500,

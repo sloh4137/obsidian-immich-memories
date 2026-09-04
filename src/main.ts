@@ -136,6 +136,7 @@ export default class ImmichMemoriesPlugin extends Plugin {
 		if (typeof this.settings.dateCacheRetentionDays !== "number")
 			this.settings.dateCacheRetentionDays = DEFAULT_SETTINGS.dateCacheRetentionDays;
 		if (!this.settings.assetCacheFolder) this.settings.assetCacheFolder = "";
+		if (typeof this.settings.swipeUpToClose !== "boolean") this.settings.swipeUpToClose = DEFAULT_SETTINGS.swipeUpToClose;
 	}
 
 	async saveSettings() {

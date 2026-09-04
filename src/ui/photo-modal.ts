@@ -13,6 +13,7 @@ export class ImmichPhotoModal extends Modal {
 	private container: HTMLElement | null = null;
 	private assetCache?: AssetFileCache;
 	private apiKey: string;
+	private swipeUpToClose: boolean;
 	/** Invalidates in-flight loads when the user pages away. */
 	private loadToken = 0;
 
@@ -22,12 +23,14 @@ export class ImmichPhotoModal extends Modal {
 		startIndex = 0,
 		assetCache?: AssetFileCache,
 		apiKey = "",
+		options?: { swipeUpToClose?: boolean },
 	) {
 		super(app);
 		this.photos = photos;
 		this.currentIndex = Math.max(0, Math.min(startIndex, photos.length - 1));
 		this.assetCache = assetCache;
 		this.apiKey = apiKey;
+		this.swipeUpToClose = options?.swipeUpToClose ?? true;
 	}
 
 	onOpen(): void {
@@ -40,6 +43,16 @@ export class ImmichPhotoModal extends Modal {
 		const header = contentEl.createDiv({ cls: "immich-memories-modal-header" });
 		this.counterEl = header.createDiv({ cls: "immich-memories-modal-counter" });
 		this.updateCounter();
+
+		// In-flow close button: Obsidian's floating .modal-close-button sits
+		// under the iPhone status bar / top bar on small screens, so the
+		// reachable close control lives in the header layout instead.
+		const closeBtn = header.createEl("button", {
+			cls: "immich-memories-modal-close",
+			text: "✕",
+		});
+		closeBtn.setAttr("aria-label", "Close");
+		closeBtn.addEventListener("click", () => this.close());
 
 		const wrapper = contentEl.createDiv({ cls: "immich-memories-modal-wrapper" });
 
@@ -86,10 +99,12 @@ export class ImmichPhotoModal extends Modal {
 		});
 
 		let startX = 0;
+		let startY = 0;
 		wrapper.addEventListener(
 			"touchstart",
 			(e) => {
 				startX = e.touches[0]?.clientX ?? 0;
+				startY = e.touches[0]?.clientY ?? 0;
 			},
 			{ passive: true },
 		);
@@ -97,9 +112,22 @@ export class ImmichPhotoModal extends Modal {
 			"touchend",
 			(e) => {
 				const endX = e.changedTouches[0]?.clientX ?? 0;
-				const diff = endX - startX;
-				if (Math.abs(diff) > 50) {
-					if (diff > 0) this.showPrevious();
+				const endY = e.changedTouches[0]?.clientY ?? 0;
+				const diffX = endX - startX;
+				const diffY = endY - startY;
+				// Swipe up (vertical, dominant axis) closes when enabled.
+				if (
+					this.swipeUpToClose &&
+					diffY < -75 &&
+					Math.abs(diffY) > Math.abs(diffX)
+				) {
+					this.close();
+					return;
+				}
+				// Horizontal paging only when horizontal motion dominates,
+				// so a vertical swipe never accidentally changes photo.
+				if (Math.abs(diffX) > 50 && Math.abs(diffX) > Math.abs(diffY)) {
+					if (diffX > 0) this.showPrevious();
 					else this.showNext();
 				}
 			},

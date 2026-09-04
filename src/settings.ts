@@ -69,7 +69,22 @@ export class ImmichSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		/* -------- Asset Cache -------- */
+		/* -------- Photo viewer -------- */
+		new Setting(containerEl).setName("Photo viewer").setHeading();
+
+		new Setting(containerEl)
+			.setName("Swipe up to close")
+			.setDesc("Swiping up on a photo in the fullscreen viewer closes it.")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.swipeUpToClose)
+					.onChange(async (value) => {
+						this.plugin.settings.swipeUpToClose = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+	/* -------- Asset Cache -------- */
 		new Setting(containerEl).setName("Asset cache").setHeading();
 
 		new Setting(containerEl)

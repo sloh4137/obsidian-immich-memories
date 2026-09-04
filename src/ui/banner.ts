@@ -381,7 +381,9 @@ export class ImmichBannerManager {
 			const assetCache = this.getAssetCache();
 
 			const openModal = () => {
-				new ImmichPhotoModal(this.app, photos, 0, assetCache, this.getSettings().immichApiKey).open();
+				new ImmichPhotoModal(this.app, photos, 0, assetCache, this.getSettings().immichApiKey, {
+					swipeUpToClose: this.getSettings().swipeUpToClose,
+				}).open();
 			};
 
 			banner.addEventListener("click", openModal);

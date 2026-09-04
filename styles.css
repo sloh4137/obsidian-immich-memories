@@ -226,6 +226,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 0.5em;
   padding: 0.6em 0.8em;
   border-bottom: 1px solid var(--background-modifier-border);
   flex-shrink: 0;
@@ -235,6 +236,36 @@
   font-size: 0.85em;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+/* In-header close control. It replaces Obsidian's floating
+   .modal-close-button, which sits under the iPhone status bar / top bar
+   when this modal goes fullscreen. Being in the header flow, it is always
+   laid out below the safe-area padding and can never be obscured. */
+.modal.immich-memories-modal .modal-close-button {
+  display: none;
+}
+
+.immich-memories-modal-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.immich-memories-modal-close:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
 }
 
 .immich-memories-modal-wrapper {
@@ -356,29 +387,21 @@
     background: #000;
   }
 
-  /* inset: 0 above drops the safe-area offset, so the header (and the close
-     button sitting over it) would otherwise land under the status bar/notch. */
+  /* inset: 0 above drops the safe-area offset, so the header content would
+     otherwise land under the status bar/notch. The close button is in the
+     header flow, so this padding keeps it reachable too. */
   .immich-memories-modal-header {
     background: var(--background-primary);
     padding: 0.7em 0.9em;
     padding-top: calc(0.7em + env(safe-area-inset-top, 0px));
-    /* Room for the close button so it never overlaps the image */
     min-height: calc(44px + env(safe-area-inset-top, 0px));
     box-sizing: border-box;
   }
 
-  .modal.immich-memories-modal .modal-close-button {
-    position: absolute;
-    top: calc(env(safe-area-inset-top, 0px) + 6px);
-    right: 6px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+  .immich-memories-modal-close {
     width: 44px;
     height: 44px;
-    font-size: 24px;
-    line-height: 1;
-    z-index: 10;
+    font-size: 22px;
   }
 
   .immich-memories-modal-caption {

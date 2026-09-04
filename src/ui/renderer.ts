@@ -382,7 +382,9 @@ export function createImmichBlockProcessor(
 		});
 
 		const openModal = (index: number) => {
-			new ImmichPhotoModal(app, photos, index, assetCache, settings.immichApiKey).open();
+			new ImmichPhotoModal(app, photos, index, assetCache, settings.immichApiKey, {
+				swipeUpToClose: settings.swipeUpToClose,
+			}).open();
 		};
 
 		previewImg.addEventListener('click', () => {
